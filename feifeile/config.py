@@ -52,7 +52,13 @@ class HNAConfig(BaseSettings):
 
 
 class WeComConfig(BaseSettings):
-    """企业微信机器人配置"""
+    """企业微信应用消息配置
+
+    使用企业微信应用 API 发送消息，需要提供：
+    - corp_id: 企业 ID
+    - secret: 应用 Secret
+    - agent_id: 应用 AgentId
+    """
 
     model_config = SettingsConfigDict(
         env_prefix="WECOM_",
@@ -61,7 +67,9 @@ class WeComConfig(BaseSettings):
         extra="ignore",
     )
 
-    webhook_url: str = Field(..., description="企业微信群机器人 Webhook URL")
+    corp_id: str = Field(..., description="企业微信企业 ID")
+    secret: str = Field(..., description="企业微信应用 Secret")
+    agent_id: int = Field(..., description="企业微信应用 AgentId")
     timeout: float = Field(default=10.0, description="发送消息超时秒数")
 
 

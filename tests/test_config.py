@@ -34,9 +34,13 @@ class TestHNAConfig:
 
 class TestWeComConfig:
     def test_defaults(self, monkeypatch):
-        monkeypatch.setenv("WECOM_WEBHOOK_URL", "https://example.com/hook")
+        monkeypatch.setenv("WECOM_CORP_ID", "ww_test")
+        monkeypatch.setenv("WECOM_SECRET", "test_secret")
+        monkeypatch.setenv("WECOM_AGENT_ID", "1000002")
         cfg = WeComConfig()
-        assert cfg.webhook_url == "https://example.com/hook"
+        assert cfg.corp_id == "ww_test"
+        assert cfg.secret == "test_secret"
+        assert cfg.agent_id == 1000002
         assert cfg.timeout == 10.0
 
 

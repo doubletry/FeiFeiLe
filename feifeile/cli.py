@@ -22,9 +22,24 @@ from feifeile.monitor import Monitor, Subscription, SubscriptionStore
 from feifeile.scheduler import run_scheduler
 
 
-def _load_all_configs() -> tuple[HNAConfig, WeComConfig, MonitorConfig]:
-    """从环境变量 / .env 文件加载配置。"""
-    return HNAConfig(), WeComConfig(), MonitorConfig()  # type: ignore[call-arg]
+def _load_all_configs(
+    *, require_wecom: bool = True,
+) -> tuple[HNAConfig, WeComConfig | None, MonitorConfig]:
+    """从环境变量 / .env 文件加载配置。
+
+    当 require_wecom=False 时，企业微信配置缺失不会报错（返回 None）。
+    """
+    hna = HNAConfig()  # type: ignore[call-arg]
+    monitor = MonitorConfig()
+    wecom: WeComConfig | None = None
+    if require_wecom:
+        wecom = WeComConfig()  # type: ignore[call-arg]
+    else:
+        try:
+            wecom = WeComConfig()  # type: ignore[call-arg]
+        except (ValueError, KeyError):
+            pass
+    return hna, wecom, monitor
 
 
 def _make_store(monitor_config: MonitorConfig) -> SubscriptionStore:
@@ -61,7 +76,7 @@ def add(
     threshold: float | None,
 ) -> None:
     """添加一条航班订阅。"""
-    _, _, monitor_config = _load_all_configs()
+    _, _, monitor_config = _load_all_configs(require_wecom=False)
     store = _make_store(monitor_config)
     price_threshold = threshold if threshold is not None else monitor_config.price_threshold
     sub = Subscription(
@@ -81,7 +96,7 @@ def add(
 @main.command("list")
 def list_subs() -> None:
     """列出所有订阅。"""
-    _, _, monitor_config = _load_all_configs()
+    _, _, monitor_config = _load_all_configs(require_wecom=False)
     store = _make_store(monitor_config)
     subs = store.list_all()
     if not subs:
@@ -100,7 +115,7 @@ def list_subs() -> None:
 @click.argument("sub_id")
 def remove(sub_id: str) -> None:
     """删除指定订阅（使用 list 命令查看 ID）。"""
-    _, _, monitor_config = _load_all_configs()
+    _, _, monitor_config = _load_all_configs(require_wecom=False)
     store = _make_store(monitor_config)
     if store.remove(sub_id):
         click.echo(f"✅ 已删除订阅 [{sub_id}]")
@@ -122,21 +137,41 @@ def remove(sub_id: str) -> None:
     default=False,
     help="启动后不立即执行，等待第一个定时触发",
 )
-def run(interval: float | None, no_immediate: bool) -> None:
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Dry-run 模式：只输出解析结果，不发送微信消息",
+)
+def run(interval: float | None, no_immediate: bool, dry_run: bool) -> None:
     """启动监控守护进程（按 Ctrl+C 停止）。"""
-    hna_config, wecom_config, monitor_config = _load_all_configs()
+    hna_config, wecom_config, monitor_config = _load_all_configs(
+        require_wecom=not dry_run,
+    )
     store = _make_store(monitor_config)
-    monitor = Monitor(hna_config, wecom_config, monitor_config, store)
+    monitor = Monitor(hna_config, wecom_config, monitor_config, store, dry_run=dry_run)
+    if dry_run:
+        click.echo("🔍 Dry-run 模式：仅查询并输出结果，不发送微信消息")
     interval_hours = interval if interval is not None else monitor_config.interval_hours
     run_scheduler(monitor, interval_hours, run_now=not no_immediate)
 
 
 @main.command()
-def check() -> None:
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Dry-run 模式：只输出解析结果，不发送微信消息",
+)
+def check(dry_run: bool) -> None:
     """立即执行一次查询（调试用，不启动调度器）。"""
-    hna_config, wecom_config, monitor_config = _load_all_configs()
+    hna_config, wecom_config, monitor_config = _load_all_configs(
+        require_wecom=not dry_run,
+    )
     store = _make_store(monitor_config)
-    monitor = Monitor(hna_config, wecom_config, monitor_config, store)
+    monitor = Monitor(hna_config, wecom_config, monitor_config, store, dry_run=dry_run)
+    if dry_run:
+        click.echo("🔍 Dry-run 模式：仅查询并输出结果，不发送微信消息")
     results = asyncio.run(monitor.run_once())
     total = sum(len(v) for v in results.values())
     click.echo(f"查询完成，共找到 {total} 个符合条件的航班")

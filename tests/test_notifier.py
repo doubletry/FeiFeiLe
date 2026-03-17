@@ -1,4 +1,4 @@
-"""tests/test_notifier.py — 企业微信通知模块单元测试"""
+"""tests/test_notifier.py — 企业微信应用消息通知模块单元测试"""
 
 from __future__ import annotations
 
@@ -8,15 +8,14 @@ import respx
 
 from feifeile.config import WeComConfig
 from feifeile.flight import FlightOffer
-from feifeile.notifier import NotifyError, WeComNotifier
-
-
-WEBHOOK_URL = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test"
+from feifeile.notifier import NotifyError, WeComNotifier, _TOKEN_URL, _SEND_URL
 
 
 @pytest.fixture
 def wecom_config(monkeypatch):
-    monkeypatch.setenv("WECOM_WEBHOOK_URL", WEBHOOK_URL)
+    monkeypatch.setenv("WECOM_CORP_ID", "ww_test_corp")
+    monkeypatch.setenv("WECOM_SECRET", "test_secret")
+    monkeypatch.setenv("WECOM_AGENT_ID", "1000002")
     return WeComConfig()
 
 
@@ -50,11 +49,27 @@ def sample_offers():
     ]
 
 
+def _mock_token_success():
+    """Mock 成功获取 access_token"""
+    return respx.get(_TOKEN_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "errcode": 0,
+                "errmsg": "ok",
+                "access_token": "test_access_token",
+                "expires_in": 7200,
+            },
+        )
+    )
+
+
 class TestWeComNotifier:
     @pytest.mark.asyncio
     async def test_send_flight_alerts_success(self, wecom_config, sample_offers):
         with respx.mock:
-            respx.post(WEBHOOK_URL).mock(
+            _mock_token_success()
+            respx.post(_SEND_URL).mock(
                 return_value=httpx.Response(200, json={"errcode": 0, "errmsg": "ok"})
             )
             notifier = WeComNotifier(wecom_config)
@@ -72,7 +87,8 @@ class TestWeComNotifier:
     @pytest.mark.asyncio
     async def test_send_text_success(self, wecom_config):
         with respx.mock:
-            respx.post(WEBHOOK_URL).mock(
+            _mock_token_success()
+            respx.post(_SEND_URL).mock(
                 return_value=httpx.Response(200, json={"errcode": 0, "errmsg": "ok"})
             )
             notifier = WeComNotifier(wecom_config)
@@ -81,9 +97,10 @@ class TestWeComNotifier:
     @pytest.mark.asyncio
     async def test_send_raises_on_wecom_error(self, wecom_config, sample_offers):
         with respx.mock:
-            respx.post(WEBHOOK_URL).mock(
+            _mock_token_success()
+            respx.post(_SEND_URL).mock(
                 return_value=httpx.Response(
-                    200, json={"errcode": 93000, "errmsg": "invalid webhook url"}
+                    200, json={"errcode": 93000, "errmsg": "invalid agentid"}
                 )
             )
             notifier = WeComNotifier(wecom_config)
@@ -93,7 +110,8 @@ class TestWeComNotifier:
     @pytest.mark.asyncio
     async def test_send_raises_on_http_error(self, wecom_config, sample_offers):
         with respx.mock:
-            respx.post(WEBHOOK_URL).mock(
+            _mock_token_success()
+            respx.post(_SEND_URL).mock(
                 return_value=httpx.Response(500)
             )
             notifier = WeComNotifier(wecom_config)
@@ -103,19 +121,63 @@ class TestWeComNotifier:
     @pytest.mark.asyncio
     async def test_send_raises_on_network_error(self, wecom_config, sample_offers):
         with respx.mock:
-            respx.post(WEBHOOK_URL).mock(
+            _mock_token_success()
+            respx.post(_SEND_URL).mock(
                 side_effect=httpx.ConnectError("connection refused")
             )
             notifier = WeComNotifier(wecom_config)
             with pytest.raises(NotifyError, match="网络错误"):
                 await notifier.send_flight_alerts(sample_offers, threshold=199.0)
 
-    def test_build_markdown_contains_flight_info(self, wecom_config, sample_offers):
-        notifier = WeComNotifier(wecom_config)
-        md = notifier._build_markdown(sample_offers, 199.0)
-        assert "HU7822" in md
-        assert "HAK" in md
-        assert "PEK" in md
-        assert "199" in md
-        assert "会员特价" in md
-        assert "2" in md  # 2 个航班
+    @pytest.mark.asyncio
+    async def test_get_token_failure(self, wecom_config, sample_offers):
+        """获取 access_token 失败时应抛出 NotifyError。"""
+        with respx.mock:
+            respx.get(_TOKEN_URL).mock(
+                return_value=httpx.Response(
+                    200,
+                    json={"errcode": 40013, "errmsg": "invalid corpid"},
+                )
+            )
+            notifier = WeComNotifier(wecom_config)
+            with pytest.raises(NotifyError, match="access_token"):
+                await notifier.send_flight_alerts(sample_offers, threshold=199.0)
+
+    @pytest.mark.asyncio
+    async def test_token_caching(self, wecom_config):
+        """第二次调用应复用缓存的 access_token，不再请求 gettoken。"""
+        with respx.mock:
+            token_route = _mock_token_success()
+            respx.post(_SEND_URL).mock(
+                return_value=httpx.Response(200, json={"errcode": 0, "errmsg": "ok"})
+            )
+            notifier = WeComNotifier(wecom_config)
+            await notifier.send_text("第一次")
+            await notifier.send_text("第二次")
+            # gettoken 应只被调用 1 次
+            assert token_route.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_expired_token_cleared(self, wecom_config, sample_offers):
+        """发送消息返回 token 过期错误时应清除缓存。"""
+        with respx.mock:
+            _mock_token_success()
+            respx.post(_SEND_URL).mock(
+                return_value=httpx.Response(
+                    200, json={"errcode": 42001, "errmsg": "access_token expired"}
+                )
+            )
+            notifier = WeComNotifier(wecom_config)
+            with pytest.raises(NotifyError, match="企业微信错误"):
+                await notifier.send_flight_alerts(sample_offers, threshold=199.0)
+            # Token 缓存应已被清除
+            assert notifier._access_token is None
+
+    def test_build_text_contains_flight_info(self, sample_offers):
+        text = WeComNotifier._build_text(sample_offers, 199.0)
+        assert "HU7822" in text
+        assert "HAK" in text
+        assert "PEK" in text
+        assert "199" in text
+        assert "会员特价" in text
+        assert "2" in text  # 2 个航班

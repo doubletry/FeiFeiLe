@@ -125,16 +125,19 @@ class Monitor:
     def __init__(
         self,
         hna_config: HNAConfig,
-        wecom_config: WeComConfig,
+        wecom_config: WeComConfig | None,
         monitor_config: MonitorConfig,
         store: SubscriptionStore,
+        *,
+        dry_run: bool = False,
     ) -> None:
         self._hna_config = hna_config
         self._monitor_config = monitor_config
         self._store = store
+        self._dry_run = dry_run
         self._auth = HNAAuth(hna_config)
         self._search = FlightSearchClient(hna_config, self._auth)
-        self._notifier = WeComNotifier(wecom_config)
+        self._notifier = WeComNotifier(wecom_config) if wecom_config and not dry_run else None
 
     async def run_once(self) -> dict[str, list[FlightOffer]]:
         """执行一次轮询，返回各订阅 ID -> 命中航班列表的映射。"""
@@ -159,7 +162,16 @@ class Monitor:
                 )
                 results[sub.id] = offers
                 if offers:
-                    await self._notifier.send_flight_alerts(offers, sub.price_threshold)
+                    if self._dry_run:
+                        logger.info(
+                            "[dry-run] 订阅 [{}] 找到 {} 个符合条件的航班（跳过发送）",
+                            sub.id,
+                            len(offers),
+                        )
+                        for o in offers:
+                            logger.info("[dry-run]   {}", o)
+                    elif self._notifier is not None:
+                        await self._notifier.send_flight_alerts(offers, sub.price_threshold)
             except Exception as exc:
                 logger.error("订阅 [{}] 查询失败: {}", sub.id, exc)
                 results[sub.id] = []

@@ -128,7 +128,9 @@ class TestSubscription:
 def configs(monkeypatch):
     monkeypatch.setenv("HNA_USERNAME", "13800000000")
     monkeypatch.setenv("HNA_PASSWORD", "test_password")
-    monkeypatch.setenv("WECOM_WEBHOOK_URL", "https://example.com/hook")
+    monkeypatch.setenv("WECOM_CORP_ID", "ww_test")
+    monkeypatch.setenv("WECOM_SECRET", "test_secret")
+    monkeypatch.setenv("WECOM_AGENT_ID", "1000002")
     return HNAConfig(), WeComConfig(), MonitorConfig()
 
 
@@ -216,3 +218,64 @@ class TestMonitor:
 
         # 过期订阅不应被处理
         assert results == {}
+
+    @pytest.mark.asyncio
+    async def test_run_once_dry_run_skips_notification(self, configs, tmp_path):
+        """dry_run 模式下应跳过发送通知。"""
+        hna, wecom, mon = configs
+        store = SubscriptionStore(str(tmp_path / "dry_subs.json"))
+        monitor = Monitor(hna, wecom, mon, store, dry_run=True)
+        store.add(make_sub())
+
+        matching_offer = FlightOffer(
+            flight_no="HU7822",
+            origin="HAK",
+            destination="PEK",
+            depart_date=(date.today() + timedelta(days=10)).isoformat(),
+            depart_time="08:00",
+            arrive_time="12:00",
+            cabin_class="Y",
+            price=199.0,
+            is_member_price=True,
+        )
+
+        # dry_run 时 _notifier 为 None，不应抛出
+        with patch.object(monitor._search, "search", new=AsyncMock(return_value=[matching_offer])):
+            results = await monitor.run_once()
+
+        assert len(results) == 1
+        offers = list(results.values())[0]
+        assert len(offers) == 1
+        assert offers[0].flight_no == "HU7822"
+        # notifier 应为 None
+        assert monitor._notifier is None
+
+    @pytest.mark.asyncio
+    async def test_run_once_dry_run_no_wecom_config(self, tmp_path, monkeypatch):
+        """dry_run 模式下不提供 WeComConfig 也应正常工作。"""
+        monkeypatch.setenv("HNA_USERNAME", "13800000000")
+        monkeypatch.setenv("HNA_PASSWORD", "test_password")
+        hna = HNAConfig()
+        mon = MonitorConfig()
+        store = SubscriptionStore(str(tmp_path / "dry_subs2.json"))
+        # wecom_config=None
+        monitor = Monitor(hna, None, mon, store, dry_run=True)
+        store.add(make_sub())
+
+        matching_offer = FlightOffer(
+            flight_no="HU7822",
+            origin="HAK",
+            destination="PEK",
+            depart_date=(date.today() + timedelta(days=10)).isoformat(),
+            depart_time="08:00",
+            arrive_time="12:00",
+            cabin_class="Y",
+            price=199.0,
+            is_member_price=True,
+        )
+
+        with patch.object(monitor._search, "search", new=AsyncMock(return_value=[matching_offer])):
+            results = await monitor.run_once()
+
+        assert len(results) == 1
+        assert monitor._notifier is None
