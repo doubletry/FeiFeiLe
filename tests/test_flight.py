@@ -306,6 +306,7 @@ class TestFlightSearchClient:
 
         assert len(offers) == 1
         assert offers[0].flight_no == "HU7822"
+        # 3 calls: 504 retry + flight query success + member query (same endpoint)
         assert route.call_count == 3
 
     @pytest.mark.asyncio
@@ -343,4 +344,5 @@ class TestFlightSearchClient:
 
         assert len(offers) == 1
         assert offers[0].price == 150.0
+        # 3 calls: network error retry + flight query success + member query (same endpoint)
         assert route.call_count == 3

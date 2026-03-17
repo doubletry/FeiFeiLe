@@ -296,10 +296,9 @@ class FlightSearchClient:
 
         body: dict[str, Any] = resp.json()  # type: ignore[union-attr]
         if not body.get("success", False):
-            raise FlightSearchError(
-                f"业务错误 {body.get('errorCode')}: "
-                f"{body.get('errorMessage')}"
-            )
+            code = body.get("errorCode") or "UNKNOWN"
+            msg = body.get("errorMessage") or "响应格式异常"
+            raise FlightSearchError(f"业务错误 {code}: {msg}")
         return body.get("data") or body
 
     @staticmethod
