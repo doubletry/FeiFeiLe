@@ -62,18 +62,25 @@ class FlightOffer:
     depart_time: str        # 出发时刻，HH:MM
     arrive_time: str        # 到达时刻，HH:MM
     cabin_class: str        # 舱位代码
-    price: float            # 最低含税票价（元）
+    price: float            # 机票价格（不含燃油基建）
+    tax: float = 0.0        # 燃油基建费
     currency: str = "CNY"
     seats_remaining: int = 0  # 剩余座位数（0 表示未知）
     is_member_price: bool = False  # 是否为会员专属价
 
+    @property
+    def total_price(self) -> float:
+        """含税总价（机票 + 燃油基建）"""
+        return self.price + self.tax
+
     def __str__(self) -> str:
         tag = "【会员特价】" if self.is_member_price else ""
+        tax_info = f"（+燃油基建¥{self.tax:.0f}）" if self.tax > 0 else ""
         return (
             f"{tag}{self.flight_no} "
             f"{self.origin}→{self.destination} "
             f"{self.depart_date} {self.depart_time}-{self.arrive_time} "
-            f"¥{self.price:.0f}"
+            f"¥{self.price:.0f}{tax_info}"
         )
 
 
@@ -436,9 +443,17 @@ def _itinerary_to_offer(
             return None
 
         price = _extract_price_from_itinerary(item)
-        if price is None:
+        base_price = _extract_base_price_from_itinerary(item)
+        if price is None and base_price is None:
             logger.debug("航班 {} 无有效价格，跳过", flight_no)
             return None
+
+        # price = 含税总价, base_price = 不含税基础票价
+        if base_price is None:
+            base_price = price
+        if price is None:
+            price = base_price
+        tax = max(price - base_price, 0)
 
         inv = item.get("inventoryQuantity")
         seats = _safe_int(inv if inv is not None else item.get("seatCount"), default=0)
@@ -451,7 +466,8 @@ def _itinerary_to_offer(
             depart_time=dep_time,
             arrive_time=arr_time,
             cabin_class=cabin,
-            price=price,
+            price=base_price,
+            tax=tax,
             seats_remaining=seats,
             is_member_price=is_member,
         )
@@ -482,6 +498,23 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _extract_base_price_from_itinerary(item: dict[str, Any]) -> float | None:
+    """从 airItinerary 中提取不含税的基础票价。
+
+    优先级：lowestPrice > minLowPrice > lowestPriceY
+    """
+    for key in ("lowestPrice", "minLowPrice", "lowestPriceY"):
+        val = item.get(key)
+        if val is not None:
+            try:
+                p = float(val)
+                if p > 0:
+                    return p
+            except (TypeError, ValueError):
+                continue
+    return None
 
 
 def _extract_price_from_itinerary(item: dict[str, Any]) -> float | None:

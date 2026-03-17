@@ -18,6 +18,7 @@ from feifeile.flight import (
     FlightSearchError,
     _extract_price,
     _extract_price_from_itinerary,
+    _extract_base_price_from_itinerary,
     _extract_itineraries,
     _itinerary_to_offer,
     _safe_int,
@@ -37,10 +38,16 @@ def _make_itinerary(
     arr_time: str = "12:00",
     cabin: str = "Y",
     price: float = 199,
+    tax: float = 50,
     seats: int = 5,
     sold_out: str = "0",
 ) -> dict:
-    """构造一个逼真的 airItinerary 对象（与 HNA API 一致）。"""
+    """构造一个逼真的 airItinerary 对象（与 HNA API 一致）。
+
+    Args:
+        price: 基础票价（不含税），对应 lowestPrice / minLowPrice。
+        tax: 燃油基建费，含税总价 = price + tax，对应 minLowPriceWithTax。
+    """
     return {
         "flightSegments": [
             {
@@ -54,9 +61,9 @@ def _make_itinerary(
                 "bookingClass": cabin,
             }
         ],
-        "minLowPriceWithTax": price,
-        "lowestPrice": price - 50,
-        "minLowPrice": price - 50,
+        "minLowPriceWithTax": price + tax,
+        "lowestPrice": price,
+        "minLowPrice": price,
         "inventoryQuantity": seats,
         "soldOut": sold_out,
     }
@@ -146,6 +153,24 @@ class TestExtractPriceFromItinerary:
         assert _extract_price_from_itinerary({"minLowPriceWithTax": 0}) is None
 
 
+class TestExtractBasePriceFromItinerary:
+    def test_lowest_price(self):
+        assert _extract_base_price_from_itinerary({"lowestPrice": 149}) == 149.0
+
+    def test_min_low_price(self):
+        assert _extract_base_price_from_itinerary({"minLowPrice": 149}) == 149.0
+
+    def test_no_price(self):
+        assert _extract_base_price_from_itinerary({}) is None
+
+    def test_zero_price_skipped(self):
+        assert _extract_base_price_from_itinerary({"lowestPrice": 0}) is None
+
+    def test_prefers_lowest_price_over_min_low(self):
+        item = {"lowestPrice": 100, "minLowPrice": 120}
+        assert _extract_base_price_from_itinerary(item) == 100.0
+
+
 # ===================================================================
 # _safe_int 安全整数转换
 # ===================================================================
@@ -204,11 +229,13 @@ class TestExtractItineraries:
 
 class TestItineraryToOffer:
     def test_nested_format(self):
-        itin = _make_itinerary(price=199)
+        itin = _make_itinerary(price=199, tax=50)
         offer = _itinerary_to_offer(itin, "HAK", "PEK", "2025-02-01", is_member=False)
         assert offer is not None
         assert offer.flight_no == "HU7822"
         assert offer.price == 199.0
+        assert offer.tax == 50.0
+        assert offer.total_price == 249.0
         assert offer.origin == "HAK"
         assert not offer.is_member_price
 
@@ -226,16 +253,19 @@ class TestItineraryToOffer:
         offer = _itinerary_to_offer(item, "HAK", "PEK", "2025-02-01", is_member=True)
         assert offer is not None
         assert offer.flight_no == "HU7822"
+        assert offer.price == 199.0
+        assert offer.tax == 0.0
         assert offer.is_member_price
 
     def test_non_numeric_inventory_quantity(self):
         """inventoryQuantity 为非数字字符串 'A' 时不应崩溃。"""
-        itin = _make_itinerary(price=199)
+        itin = _make_itinerary(price=199, tax=50)
         itin["inventoryQuantity"] = "A"
         offer = _itinerary_to_offer(itin, "HAK", "PEK", "2025-02-01", is_member=True)
         assert offer is not None
         assert offer.seats_remaining == 0
         assert offer.price == 199.0
+        assert offer.tax == 50.0
 
     def test_actual_api_segment_format(self):
         """使用实际 HNA API 返回的航段格式验证解析。"""
@@ -276,7 +306,9 @@ class TestItineraryToOffer:
         assert offer.depart_time == "09:40"
         assert offer.arrive_time == "12:20"
         assert offer.depart_date == "2026-04-04"
-        assert offer.price == 399.0
+        assert offer.price == 349.0       # 基础票价（不含税）
+        assert offer.tax == 50.0          # 燃油基建费 = 399 - 349
+        assert offer.total_price == 399.0 # 含税总价
         assert offer.seats_remaining == 0  # 'A' → default 0
         assert offer.cabin_class == "Y"  # empty bookingClass & cabinClass → default "Y"
         assert offer.is_member_price
@@ -288,6 +320,25 @@ class TestItineraryToOffer:
         offer = _itinerary_to_offer(itin, "HAK", "PEK", "2025-02-01", is_member=False)
         assert offer is not None
         assert offer.cabin_class == "W"
+
+    def test_only_total_price_available(self):
+        """只有含税总价、无基础票价时，税费为 0。"""
+        itin = _make_itinerary(price=199, tax=50)
+        del itin["lowestPrice"]
+        del itin["minLowPrice"]
+        offer = _itinerary_to_offer(itin, "HAK", "PEK", "2025-02-01", is_member=False)
+        assert offer is not None
+        assert offer.price == 249.0  # minLowPriceWithTax 作为基础票价
+        assert offer.tax == 0.0      # 无法区分税费
+
+    def test_only_base_price_available(self):
+        """只有基础票价、无含税总价时，税费为 0。"""
+        itin = _make_itinerary(price=199, tax=50)
+        del itin["minLowPriceWithTax"]
+        offer = _itinerary_to_offer(itin, "HAK", "PEK", "2025-02-01", is_member=False)
+        assert offer is not None
+        assert offer.price == 199.0  # 基础票价
+        assert offer.tax == 0.0      # 总价未知，无法计算税费
 
 
 # ===================================================================
@@ -309,6 +360,8 @@ class TestFlightOffer:
         assert "HU7822" in str(offer)
         assert "¥199" in str(offer)
         assert "【会员特价】" not in str(offer)
+        # 无税费时不显示燃油基建信息
+        assert "燃油基建" not in str(offer)
 
     def test_str_member_price(self):
         offer = FlightOffer(
@@ -323,6 +376,37 @@ class TestFlightOffer:
             is_member_price=True,
         )
         assert "【会员特价】" in str(offer)
+
+    def test_str_with_tax(self):
+        offer = FlightOffer(
+            flight_no="HU7822",
+            origin="HAK",
+            destination="PEK",
+            depart_date="2025-02-01",
+            depart_time="08:00",
+            arrive_time="12:00",
+            cabin_class="Y",
+            price=149.0,
+            tax=50.0,
+        )
+        s = str(offer)
+        assert "¥149" in s
+        assert "燃油基建¥50" in s
+        assert offer.total_price == 199.0
+
+    def test_total_price_property(self):
+        offer = FlightOffer(
+            flight_no="HU7822",
+            origin="HAK",
+            destination="PEK",
+            depart_date="2025-02-01",
+            depart_time="08:00",
+            arrive_time="12:00",
+            cabin_class="Y",
+            price=149.0,
+            tax=50.0,
+        )
+        assert offer.total_price == 199.0
 
 
 # ===================================================================

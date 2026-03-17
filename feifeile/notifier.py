@@ -1,6 +1,6 @@
 """企业微信应用消息通知模块
 
-通过企业微信应用 API 发送文本消息。
+通过企业微信应用 API 发送卡片消息（textcard）。
 需要提供 CORP_ID、SECRET 和 AGENT_ID。
 """
 
@@ -45,7 +45,7 @@ class WeComNotifier:
         offers: list[FlightOffer],
         threshold: float,
     ) -> None:
-        """发送航班特价提醒消息。
+        """发送航班特价提醒卡片消息。
 
         若 offers 为空，则跳过发送。
         """
@@ -53,36 +53,57 @@ class WeComNotifier:
             logger.debug("无符合条件的航班，跳过通知")
             return
 
-        content = self._build_text(offers, threshold)
-        await self._send_text_message(content)
+        card = self._build_textcard(offers, threshold)
+        await self._send_message({
+            "touser": "@all",
+            "msgtype": "textcard",
+            "agentid": self._config.agent_id,
+            "textcard": card,
+        })
 
     async def send_text(self, text: str) -> None:
         """发送纯文本消息（用于状态播报等）。"""
-        await self._send_text_message(text)
+        await self._send_message({
+            "touser": "@all",
+            "msgtype": "text",
+            "agentid": self._config.agent_id,
+            "text": {"content": text},
+        })
 
     # ------------------------------------------------------------------
     # 内部实现
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _build_text(offers: list[FlightOffer], threshold: float) -> str:
-        lines = [
-            f"✈️ 海南航空特价机票提醒（≤ ¥{threshold:.0f}）",
-            f"共找到 {len(offers)} 个符合条件的航班",
-            "",
+    def _build_textcard(
+        offers: list[FlightOffer], threshold: float,
+    ) -> dict[str, str]:
+        """构建企业微信 textcard 卡片内容。"""
+        title = f"✈️ 特价机票提醒（≤ ¥{threshold:.0f}）"
+        lines: list[str] = [
+            f'<div class="gray">共找到 {len(offers)} 个符合条件的航班</div>',
         ]
         for offer in offers:
-            tag = "🏷️【会员特价】" if offer.is_member_price else ""
-            seats = f"，余票 {offer.seats_remaining} 张" if offer.seats_remaining > 0 else ""
+            tag = "🏷️" if offer.is_member_price else ""
+            seats = f" 余{offer.seats_remaining}张" if offer.seats_remaining > 0 else ""
             lines.append(
-                f"{tag}{offer.flight_no} "
+                f'<div class="normal">{tag}{offer.flight_no} '
                 f"{offer.origin}→{offer.destination} "
-                f"{offer.depart_date} {offer.depart_time}→{offer.arrive_time} "
-                f"¥{offer.price:.0f}{seats}"
+                f"{offer.depart_time}→{offer.arrive_time}{seats}</div>"
             )
-        lines.append("")
-        lines.append("请及时登录海南航空 App 购买！")
-        return "\n".join(lines)
+            tax_info = f" + 税费¥{offer.tax:.0f}" if offer.tax > 0 else ""
+            lines.append(
+                f'<div class="highlight">'
+                f"机票¥{offer.price:.0f}{tax_info}"
+                f"</div>"
+            )
+        description = "\n".join(lines)
+        return {
+            "title": title,
+            "description": description,
+            "url": "https://m.hnair.com/",
+            "btntxt": "立即购买",
+        }
 
     async def _get_access_token(self) -> str:
         """获取企业微信 access_token，带缓存。"""
@@ -119,15 +140,9 @@ class WeComNotifier:
         logger.debug("获取 access_token 成功，有效期 {}s", expires_in)
         return self._access_token
 
-    async def _send_text_message(self, content: str) -> None:
-        """通过企业微信应用 API 发送文本消息。"""
+    async def _send_message(self, payload: dict[str, Any]) -> None:
+        """通过企业微信应用 API 发送消息（支持 text / textcard 等类型）。"""
         token = await self._get_access_token()
-        payload: dict[str, Any] = {
-            "touser": "@all",
-            "msgtype": "text",
-            "agentid": self._config.agent_id,
-            "text": {"content": content},
-        }
         async with httpx.AsyncClient(timeout=self._config.timeout) as client:
             try:
                 resp = await client.post(
