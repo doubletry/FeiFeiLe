@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 import respx
@@ -211,19 +213,16 @@ class TestWeComNotifier:
         assert "机票¥199" in desc
         assert "税费" not in desc
 
-    def test_send_flight_alerts_sends_textcard(self, wecom_config, sample_offers):
+    @pytest.mark.asyncio
+    async def test_send_flight_alerts_sends_textcard(self, wecom_config, sample_offers):
         """验证 send_flight_alerts 发送 textcard 类型而非 text 类型。"""
-        import json
         with respx.mock:
             _mock_token_success()
             send_route = respx.post(_SEND_URL).mock(
                 return_value=httpx.Response(200, json={"errcode": 0, "errmsg": "ok"})
             )
             notifier = WeComNotifier(wecom_config)
-            import asyncio
-            asyncio.get_event_loop().run_until_complete(
-                notifier.send_flight_alerts(sample_offers, threshold=199.0)
-            )
+            await notifier.send_flight_alerts(sample_offers, threshold=199.0)
             # 检查发送的 payload 使用了 textcard 类型
             sent_body = json.loads(send_route.calls[0].request.content)
             assert sent_body["msgtype"] == "textcard"
