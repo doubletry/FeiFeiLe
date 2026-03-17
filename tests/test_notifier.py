@@ -175,11 +175,58 @@ class TestWeComNotifier:
             # Token 缓存应已被清除
             assert notifier._access_token is None
 
-    def test_build_text_contains_flight_info(self, sample_offers):
-        text = WeComNotifier._build_text(sample_offers, 199.0)
-        assert "HU7822" in text
-        assert "HAK" in text
-        assert "PEK" in text
-        assert "199" in text
-        assert "会员特价" in text
-        assert "2" in text  # 2 个航班
+    def test_build_textcard_contains_flight_info(self, sample_offers):
+        card = WeComNotifier._build_textcard(sample_offers, 199.0)
+        assert isinstance(card, dict)
+        assert "title" in card
+        assert "description" in card
+        assert "url" in card
+        assert "btntxt" in card
+        desc = card["description"]
+        assert "HU7822" in desc
+        assert "HAK" in desc
+        assert "PEK" in desc
+        assert "199" in card["title"]
+        assert "2" in desc  # 2 个航班
+        # 验证机票和税费分别列出
+        assert "机票¥149" in desc
+        assert "税费¥50" in desc
+
+    def test_build_textcard_no_tax(self):
+        offers = [
+            FlightOffer(
+                flight_no="HU7822",
+                origin="HAK",
+                destination="PEK",
+                depart_date="2025-02-01",
+                depart_time="08:00",
+                arrive_time="12:00",
+                cabin_class="Y",
+                price=199.0,
+                tax=0.0,
+            ),
+        ]
+        card = WeComNotifier._build_textcard(offers, 199.0)
+        desc = card["description"]
+        assert "机票¥199" in desc
+        assert "税费" not in desc
+
+    def test_send_flight_alerts_sends_textcard(self, wecom_config, sample_offers):
+        """验证 send_flight_alerts 发送 textcard 类型而非 text 类型。"""
+        import json
+        with respx.mock:
+            _mock_token_success()
+            send_route = respx.post(_SEND_URL).mock(
+                return_value=httpx.Response(200, json={"errcode": 0, "errmsg": "ok"})
+            )
+            notifier = WeComNotifier(wecom_config)
+            import asyncio
+            asyncio.get_event_loop().run_until_complete(
+                notifier.send_flight_alerts(sample_offers, threshold=199.0)
+            )
+            # 检查发送的 payload 使用了 textcard 类型
+            sent_body = json.loads(send_route.calls[0].request.content)
+            assert sent_body["msgtype"] == "textcard"
+            assert "textcard" in sent_body
+            assert "title" in sent_body["textcard"]
+            assert "description" in sent_body["textcard"]
