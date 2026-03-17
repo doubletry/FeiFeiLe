@@ -64,10 +64,15 @@ class TestHNAAuth:
             "success": True,
             "errorCode": None,
             "data": {
-                "accessToken": "tok_abc",
-                "refreshToken": "ref_xyz",
-                "expiresIn": 7200,
-                "memberId": "MBR001",
+                "ok": True,
+                "token": "tok_abc",
+                "secret": "ref_xyz",
+                "user": {
+                    "cid": "MBR001",
+                    "ucUserId": "UC001",
+                    "userCode": "USER001",
+                    "userType": "JP",
+                },
             },
         }
         with respx.mock:
@@ -134,20 +139,20 @@ class TestHNAAuth:
             "success": True,
             "errorCode": None,
             "data": {
-                "accessToken": "old_tok",
-                "refreshToken": "ref_xyz",
-                "expiresIn": 7200,
-                "memberId": "MBR001",
+                "ok": True,
+                "token": "old_tok",
+                "secret": "ref_xyz",
+                "user": {"cid": "MBR001"},
             },
         }
         refresh_response = {
             "success": True,
             "errorCode": None,
             "data": {
-                "accessToken": "new_tok",
-                "refreshToken": "new_ref",
-                "expiresIn": 7200,
-                "memberId": "MBR001",
+                "ok": True,
+                "token": "new_tok",
+                "secret": "new_ref",
+                "user": {"cid": "MBR001"},
             },
         }
         with respx.mock:
@@ -174,9 +179,9 @@ class TestHNAAuth:
             "success": True,
             "errorCode": None,
             "data": {
-                "accessToken": "tok",
-                "refreshToken": "ref",
-                "expiresIn": 7200,
+                "ok": True,
+                "token": "tok",
+                "secret": "ref",
             },
         }
         with respx.mock:
@@ -197,10 +202,10 @@ class TestHNAAuth:
             "success": True,
             "errorCode": None,
             "data": {
-                "accessToken": "tok_retry",
-                "refreshToken": "ref_retry",
-                "expiresIn": 7200,
-                "memberId": "MBR_RETRY",
+                "ok": True,
+                "token": "tok_retry",
+                "secret": "ref_retry",
+                "user": {"cid": "MBR_RETRY"},
             },
         }
         with respx.mock:
@@ -248,9 +253,9 @@ class TestHNAAuth:
             "success": True,
             "errorCode": None,
             "data": {
-                "accessToken": "tok_net",
-                "refreshToken": "ref_net",
-                "expiresIn": 7200,
+                "ok": True,
+                "token": "tok_net",
+                "secret": "ref_net",
             },
         }
         with respx.mock:

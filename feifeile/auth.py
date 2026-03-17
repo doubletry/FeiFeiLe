@@ -301,6 +301,10 @@ class HNAAuth:
                         continue
                     resp.raise_for_status()
                 except httpx.HTTPStatusError as exc:
+                    logger.exception(
+                        "请求 {} 返回 HTTP 错误 {}",
+                        url, exc.response.status_code,
+                    )
                     raise AuthError(
                         f"HTTP 错误 {exc.response.status_code}: {exc.response.text}"
                     ) from exc
@@ -313,6 +317,7 @@ class HNAAuth:
                         )
                         await asyncio.sleep(wait)
                         continue
+                    logger.exception("请求 {} 网络错误（已重试 {} 次）", url, max_retries)
                     raise AuthError(f"网络错误（已重试 {max_retries} 次）: {exc}") from exc
                 else:
                     break
@@ -326,7 +331,17 @@ class HNAAuth:
 
     @staticmethod
     def _parse_token(data: dict[str, Any]) -> AuthToken:
-        """从响应数据中解析 AuthToken。"""
+        """从响应数据中解析 AuthToken。
+
+        HNA 登录响应格式::
+
+            {
+                "ok": true,
+                "token": "access_token_value",
+                "secret": "...",
+                "user": {"cid": "会员号", "ucUserId": "...", "userCode": "..."}
+            }
+        """
         access_token = (
             data.get("accessToken")
             or data.get("access_token")
@@ -334,13 +349,21 @@ class HNAAuth:
             or ""
         )
         refresh_token = (
-            data.get("refreshToken") or data.get("refresh_token") or ""
+            data.get("refreshToken") or data.get("refresh_token")
+            or data.get("secret") or ""
         )
         expires_in = int(
             data.get("expiresIn") or data.get("expires_in") or 7200
         )
+        # 会员 ID 可能在 data.user.cid / data.memberId 等位置
+        user_info = data.get("user") or {}
         member_id = str(
-            data.get("memberId") or data.get("member_id") or ""
+            user_info.get("cid")
+            or data.get("memberId")
+            or data.get("member_id")
+            or user_info.get("ucUserId")
+            or user_info.get("userCode")
+            or ""
         )
         if not access_token:
             raise AuthError(f"响应中未找到 accessToken: {data}")

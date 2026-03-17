@@ -121,7 +121,7 @@ class FlightSearchClient:
             )
             offers.extend(self._parse_flights(raw_flights, origin, destination, date_str))
         except FlightSearchError as exc:
-            logger.warning("普通航班查询失败: {}", exc)
+            logger.exception("普通航班查询失败: {}", exc)
 
         # 2. 会员专属特价查询（叠加）
         try:
@@ -142,7 +142,7 @@ class FlightSearchClient:
                 else:
                     offers.append(mo)
         except FlightSearchError as exc:
-            logger.warning("会员特价查询失败: {}", exc)
+            logger.exception("会员特价查询失败: {}", exc)
 
         qualified = [o for o in offers if o.price <= threshold]
         logger.info(
@@ -173,10 +173,17 @@ class FlightSearchClient:
         access_token: str,
     ) -> list[dict[str, Any]]:
         data_params: dict[str, Any] = {
-            "dptCity": origin,
-            "arrCity": destination,
-            "dptDate": date_str,
-            "tripType": "1",
+            "originDestinations": [
+                {
+                    "departureDate": date_str,
+                    "origin": origin,
+                    "originType": "1",
+                    "destination": destination,
+                    "destinationType": "1",
+                }
+            ],
+            "passenger": "ADT:1",
+            "type": "OW",
             "adultCount": "1",
             "childCount": "0",
             "infantCount": "0",
@@ -214,9 +221,17 @@ class FlightSearchClient:
         access_token: str,
     ) -> list[dict[str, Any]]:
         data_params: dict[str, Any] = {
-            "dptCity": origin,
-            "arrCity": destination,
-            "dptDate": date_str,
+            "originDestinations": [
+                {
+                    "departureDate": date_str,
+                    "origin": origin,
+                    "originType": "1",
+                    "destination": destination,
+                    "destinationType": "1",
+                }
+            ],
+            "passenger": "ADT:1",
+            "type": "OW",
         }
         common = _build_common_params(self._config)
         body = {
@@ -276,6 +291,10 @@ class FlightSearchClient:
                         continue
                     resp.raise_for_status()
                 except httpx.HTTPStatusError as exc:
+                    logger.exception(
+                        "请求 {} 返回 HTTP 错误 {}",
+                        url, exc.response.status_code,
+                    )
                     raise FlightSearchError(
                         f"HTTP 错误 {exc.response.status_code}: {exc.response.text}"
                     ) from exc
@@ -288,6 +307,9 @@ class FlightSearchClient:
                         )
                         await asyncio.sleep(wait)
                         continue
+                    logger.exception(
+                        "请求 {} 网络错误（已重试 {} 次）", url, max_retries,
+                    )
                     raise FlightSearchError(
                         f"网络错误（已重试 {max_retries} 次）: {exc}"
                     ) from exc
