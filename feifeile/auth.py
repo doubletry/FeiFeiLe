@@ -245,7 +245,10 @@ class HNAAuth:
         logger.info("正在登录海南航空账号: {}", self._config.username)
         result = await self._post(url, body, headers, params={"hnairSign": sign})
         self._token = self._parse_token(result)
-        logger.info("登录成功，会员 ID: {}", self._token.member_id)
+        if not self._token.member_id:
+            logger.warning("登录成功但未获取到会员 ID，响应数据: {}", result)
+        else:
+            logger.info("登录成功，会员 ID: {}", self._token.member_id)
 
     async def _refresh(self) -> None:
         """使用 Refresh Token 刷新 Access Token。"""

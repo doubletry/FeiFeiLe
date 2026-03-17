@@ -177,13 +177,13 @@ class FlightSearchClient:
                 {
                     "departureDate": date_str,
                     "origin": origin,
-                    "originType": "1",
+                    "originType": "1",       # 1 = 城市代码
                     "destination": destination,
-                    "destinationType": "1",
+                    "destinationType": "1",  # 1 = 城市代码
                 }
             ],
-            "passenger": "ADT:1",
-            "type": "OW",
+            "passenger": "ADT:1",  # ADT = 成人，1 位
+            "type": "OW",          # OW = 单程
             "adultCount": "1",
             "childCount": "0",
             "infantCount": "0",
@@ -225,13 +225,13 @@ class FlightSearchClient:
                 {
                     "departureDate": date_str,
                     "origin": origin,
-                    "originType": "1",
+                    "originType": "1",       # 1 = 城市代码
                     "destination": destination,
-                    "destinationType": "1",
+                    "destinationType": "1",  # 1 = 城市代码
                 }
             ],
-            "passenger": "ADT:1",
-            "type": "OW",
+            "passenger": "ADT:1",  # ADT = 成人，1 位
+            "type": "OW",          # OW = 单程
         }
         common = _build_common_params(self._config)
         body = {
