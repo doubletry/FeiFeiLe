@@ -421,7 +421,8 @@ def _itinerary_to_offer(
             logger.debug("航班 {} 无有效价格，跳过", flight_no)
             return None
 
-        seats = int(item.get("inventoryQuantity") or item.get("seatCount") or 0)
+        inv = item.get("inventoryQuantity")
+        seats = int(inv if inv is not None else (item.get("seatCount") or 0))
 
         return FlightOffer(
             flight_no=flight_no,

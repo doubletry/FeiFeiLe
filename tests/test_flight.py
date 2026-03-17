@@ -184,6 +184,11 @@ class TestItineraryToOffer:
         itin = _make_itinerary(sold_out="1")
         assert _itinerary_to_offer(itin, "HAK", "PEK", "2025-02-01", is_member=False) is None
 
+    def test_sold_out_bool_skipped(self):
+        itin = _make_itinerary()
+        itin["soldOut"] = True
+        assert _itinerary_to_offer(itin, "HAK", "PEK", "2025-02-01", is_member=False) is None
+
     def test_flat_format_fallback(self):
         item = {"flightNo": "HU7822", "price": "199"}
         offer = _itinerary_to_offer(item, "HAK", "PEK", "2025-02-01", is_member=True)
