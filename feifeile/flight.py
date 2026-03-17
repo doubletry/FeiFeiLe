@@ -117,7 +117,7 @@ class FlightSearchClient:
         # 1. 通用航班列表查询
         try:
             raw_flights = await self._query_flights(
-                origin, destination, date_str, headers
+                origin, destination, date_str, headers, token.access_token
             )
             offers.extend(self._parse_flights(raw_flights, origin, destination, date_str))
         except FlightSearchError as exc:
@@ -126,7 +126,7 @@ class FlightSearchClient:
         # 2. 会员专属特价查询（叠加）
         try:
             raw_member = await self._query_member_fares(
-                origin, destination, date_str, headers
+                origin, destination, date_str, headers, token.access_token
             )
             member_offers = self._parse_member_fares(
                 raw_member, origin, destination, date_str
@@ -170,6 +170,7 @@ class FlightSearchClient:
         destination: str,
         date_str: str,
         headers: dict[str, str],
+        access_token: str,
     ) -> list[dict[str, Any]]:
         data_params: dict[str, Any] = {
             "dptCity": origin,
@@ -180,17 +181,21 @@ class FlightSearchClient:
             "childCount": "0",
             "infantCount": "0",
         }
+        common = _build_common_params(self._config)
         body = {
-            "common": _build_common_params(self._config),
+            "common": common,
             "data": data_params,
         }
         url = f"{self._config.base_url}{_FLIGHT_SEARCH_PATH}"
+        flat_params = {**common, **data_params}
+        query: dict[str, str] = {"token": access_token}
         sign = _compute_sign(
-            headers, {}, data_params,
+            headers, query, flat_params,
             self._config.certificate_hash, self._config.hard_code,
         )
+        query["hnairSign"] = sign
         result = await self._post(
-            url, body, headers, params={"hnairSign": sign},
+            url, body, headers, params=query,
         )
         flights: list[dict[str, Any]] = (
             result.get("flightList")
@@ -206,23 +211,28 @@ class FlightSearchClient:
         destination: str,
         date_str: str,
         headers: dict[str, str],
+        access_token: str,
     ) -> list[dict[str, Any]]:
         data_params: dict[str, Any] = {
             "dptCity": origin,
             "arrCity": destination,
             "dptDate": date_str,
         }
+        common = _build_common_params(self._config)
         body = {
-            "common": _build_common_params(self._config),
+            "common": common,
             "data": data_params,
         }
         url = f"{self._config.base_url}{_MEMBER_PRICE_PATH}"
+        flat_params = {**common, **data_params}
+        query: dict[str, str] = {"token": access_token}
         sign = _compute_sign(
-            headers, {}, data_params,
+            headers, query, flat_params,
             self._config.certificate_hash, self._config.hard_code,
         )
+        query["hnairSign"] = sign
         result = await self._post(
-            url, body, headers, params={"hnairSign": sign},
+            url, body, headers, params=query,
         )
         fares: list[dict[str, Any]] = (
             result.get("fareList")

@@ -225,18 +225,21 @@ class HNAAuth:
     async def _login(self) -> None:
         """使用账号密码登录，获取 Token。"""
         data_params: dict[str, Any] = {
-            "loginName": self._config.username,
-            "loginPwd": _rsa_encrypt(self._config.password),
-            "loginType": "1",
+            "number": self._config.username,
+            "pin": _rsa_encrypt(self._config.password),
+            "toSave": True,
         }
+        common = _build_common_params(self._config)
         body = {
-            "common": _build_common_params(self._config),
+            "common": common,
             "data": data_params,
         }
         url = f"{self._config.base_url}{_LOGIN_PATH}"
         headers = self._build_headers()
+        # 签名使用 common + data 合并后的扁平字典
+        flat_params = {**common, **data_params}
         sign = _compute_sign(
-            headers, {}, data_params,
+            headers, {}, flat_params,
             self._config.certificate_hash, self._config.hard_code,
         )
         logger.info("正在登录海南航空账号: {}", self._config.username)
@@ -251,14 +254,16 @@ class HNAAuth:
         data_params: dict[str, Any] = {
             "refreshToken": self._token.refresh_token,
         }
+        common = _build_common_params(self._config)
         body = {
-            "common": _build_common_params(self._config),
+            "common": common,
             "data": data_params,
         }
         url = f"{self._config.base_url}{_REFRESH_PATH}"
         headers = self._build_headers()
+        flat_params = {**common, **data_params}
         sign = _compute_sign(
-            headers, {}, data_params,
+            headers, {}, flat_params,
             self._config.certificate_hash, self._config.hard_code,
         )
         logger.debug("正在刷新 Token")
