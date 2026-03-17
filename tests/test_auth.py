@@ -276,3 +276,35 @@ class TestHNAAuth:
 
         assert token.access_token == "tok_net"
         assert route.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_retry_on_521_cloudflare_then_success(self, hna_config):
+        """Cloudflare 521 (Web Server Is Down) 应自动重试。"""
+        login_response = {
+            "success": True,
+            "errorCode": None,
+            "data": {
+                "ok": True,
+                "token": "tok_cf",
+                "secret": "ref_cf",
+                "user": {"cid": "MBR_CF"},
+            },
+        }
+        with respx.mock:
+            route = respx.post(_login_url(hna_config))
+            route.side_effect = [
+                httpx.Response(521),
+                httpx.Response(200, json=login_response),
+            ]
+
+            auth = HNAAuth(hna_config)
+            import feifeile.auth
+            original_delay = feifeile.auth._RETRY_BASE_DELAY
+            feifeile.auth._RETRY_BASE_DELAY = 0.01
+            try:
+                token = await auth.get_token()
+            finally:
+                feifeile.auth._RETRY_BASE_DELAY = original_delay
+
+        assert token.access_token == "tok_cf"
+        assert route.call_count == 2

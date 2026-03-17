@@ -27,14 +27,24 @@ _FLIGHT_SEARCH_PATH = "/ticket/lfs/airLowFareSearch"
 # 会员专属特价接口（同一端点，携带会员 Token 返回会员价）
 _MEMBER_PRICE_PATH = "/ticket/lfs/airLowFareSearch"
 
-# 遇到以下 HTTP 状态码时自动重试（网关/上游瞬态故障）
-_RETRYABLE_STATUS_CODES = {502, 503, 504}
+# 遇到以下 HTTP 状态码时自动重试（网关/上游瞬态故障 + Cloudflare 专属瞬态错误）
+_RETRYABLE_STATUS_CODES = {502, 503, 504, 520, 521, 522, 523, 524, 530}
 # 首次重试等待秒数，后续指数退避 (2s → 4s → 8s ...)
 _RETRY_BASE_DELAY = 2.0
 
-# 标准请求头（与 auth 模块一致）
+# 标准请求头（与 auth 模块一致，包含 User-Agent 以避免 Cloudflare 拦截）
 _DEFAULT_HEADERS: dict[str, str] = {
     "Content-Type": "application/json",
+    "User-Agent": (
+        "Mozilla/5.0 (Linux; Android 12; Pixel 6 Pro) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Mobile Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Origin": "https://m.hnair.com",
+    "Referer": "https://m.hnair.com/",
     "appver": "{app_version}",
     "hna-app": "APP",
     "hna-channel": "HTML5",
@@ -255,7 +265,7 @@ class FlightSearchClient:
     ) -> dict[str, Any]:
         """发送 POST 请求并返回业务数据字典。
 
-        对 502/503/504 等网关瞬态错误自动重试（指数退避）。
+        对 502/503/504 及 Cloudflare 520-524/530 等瞬态错误自动重试（指数退避）。
         """
         max_retries = self._config.max_retries
         resp = None
@@ -265,6 +275,10 @@ class FlightSearchClient:
                 try:
                     resp = await client.post(
                         url, json=payload, headers=headers, params=params,
+                    )
+                    logger.debug(
+                        "POST {} -> HTTP {}（attempt {}/{}）",
+                        url, resp.status_code, attempt + 1, max_retries + 1,
                     )
                     if resp.status_code == 401:
                         await self._auth.invalidate()
@@ -279,9 +293,12 @@ class FlightSearchClient:
                         continue
                     resp.raise_for_status()
                 except httpx.HTTPStatusError as exc:
-                    logger.exception(
-                        "请求 {} 返回 HTTP 错误 {}",
-                        url, exc.response.status_code,
+                    resp_text = exc.response.text or "(empty)"
+                    if len(resp_text) > 500:
+                        resp_text = resp_text[:500] + "...(truncated)"
+                    logger.error(
+                        "请求 {} 返回 HTTP 错误 {}，响应: {}",
+                        url, exc.response.status_code, resp_text,
                     )
                     raise FlightSearchError(
                         f"HTTP 错误 {exc.response.status_code}: {exc.response.text}"
@@ -305,9 +322,11 @@ class FlightSearchClient:
                     break
 
         body: dict[str, Any] = resp.json()  # type: ignore[union-attr]
+        logger.debug("API 响应 success={}, keys={}", body.get("success"), list(body.keys()))
         if not body.get("success", False):
             code = body.get("errorCode") or "UNKNOWN"
             msg = body.get("errorMessage") or "响应格式异常"
+            logger.warning("业务错误 code={}, message={}, body={}", code, msg, body)
             raise FlightSearchError(f"业务错误 {code}: {msg}")
         return body.get("data") or body
 

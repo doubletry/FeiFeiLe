@@ -421,3 +421,33 @@ class TestFlightSearchClient:
 
         assert len(offers) == 1
         assert offers[0].flight_no == "HU7824"
+
+    @pytest.mark.asyncio
+    async def test_retry_on_521_cloudflare_then_success(self, hna_config, mock_auth):
+        """Cloudflare 521 (Web Server Is Down) 应自动重试并最终返回结果。"""
+        flight_response = _wrap_response([
+            _make_itinerary(flight_no="7822", price=199),
+        ])
+        member_response = _wrap_response([])
+
+        with respx.mock:
+            route = respx.post(_search_url(hna_config))
+            route.side_effect = [
+                httpx.Response(521),               # Cloudflare 521
+                httpx.Response(200, json=flight_response),  # retry succeeds
+                httpx.Response(200, json=member_response),  # member query
+            ]
+
+            client = FlightSearchClient(hna_config, mock_auth)
+            import feifeile.flight
+            original_delay = feifeile.flight._RETRY_BASE_DELAY
+            feifeile.flight._RETRY_BASE_DELAY = 0.01
+            try:
+                offers = await client.search("HAK", "PEK", date(2025, 2, 1), threshold=199.0)
+            finally:
+                feifeile.flight._RETRY_BASE_DELAY = original_delay
+
+        assert len(offers) == 1
+        assert offers[0].flight_no == "HU7822"
+        # 3 calls: 521 retry + flight query success + member query
+        assert route.call_count == 3

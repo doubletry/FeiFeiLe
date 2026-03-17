@@ -42,6 +42,16 @@ _RSA_KEY_SIZE = 128  # 1024 bits
 # ---------------------------------------------------------------------------
 _DEFAULT_HEADERS: dict[str, str] = {
     "Content-Type": "application/json",
+    "User-Agent": (
+        "Mozilla/5.0 (Linux; Android 12; Pixel 6 Pro) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Mobile Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Origin": "https://m.hnair.com",
+    "Referer": "https://m.hnair.com/",
     "appver": "{app_version}",
     "hna-app": "APP",
     "hna-channel": "HTML5",
@@ -50,7 +60,8 @@ _DEFAULT_HEADERS: dict[str, str] = {
 # ---------------------------------------------------------------------------
 # 重试配置
 # ---------------------------------------------------------------------------
-_RETRYABLE_STATUS_CODES = {502, 503, 504}
+# 包括标准网关错误 (502/503/504) 和 Cloudflare 专属瞬态错误 (520-524/530)
+_RETRYABLE_STATUS_CODES = {502, 503, 504, 520, 521, 522, 523, 524, 530}
 _RETRY_BASE_DELAY = 2.0
 
 # ---------------------------------------------------------------------------
@@ -284,7 +295,7 @@ class HNAAuth:
     ) -> dict[str, Any]:
         """发送 POST 请求并返回业务数据字典。
 
-        对 502/503/504 等网关瞬态错误自动重试（指数退避）。
+        对 502/503/504 及 Cloudflare 520-524/530 等瞬态错误自动重试（指数退避）。
         """
         max_retries = self._config.max_retries
 
@@ -293,6 +304,10 @@ class HNAAuth:
                 try:
                     resp = await client.post(
                         url, json=payload, headers=headers, params=params,
+                    )
+                    logger.debug(
+                        "POST {} -> HTTP {}（attempt {}/{}）",
+                        url, resp.status_code, attempt + 1, max_retries + 1,
                     )
                     if resp.status_code in _RETRYABLE_STATUS_CODES and attempt < max_retries:
                         wait = _RETRY_BASE_DELAY * (2 ** attempt)
@@ -304,9 +319,12 @@ class HNAAuth:
                         continue
                     resp.raise_for_status()
                 except httpx.HTTPStatusError as exc:
-                    logger.exception(
-                        "请求 {} 返回 HTTP 错误 {}",
-                        url, exc.response.status_code,
+                    resp_text = exc.response.text or "(empty)"
+                    if len(resp_text) > 500:
+                        resp_text = resp_text[:500] + "...(truncated)"
+                    logger.error(
+                        "请求 {} 返回 HTTP 错误 {}，响应: {}",
+                        url, exc.response.status_code, resp_text,
                     )
                     raise AuthError(
                         f"HTTP 错误 {exc.response.status_code}: {exc.response.text}"
