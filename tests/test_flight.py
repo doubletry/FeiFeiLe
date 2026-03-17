@@ -12,10 +12,65 @@ import respx
 
 from feifeile.auth import AuthToken, HNAAuth
 from feifeile.config import HNAConfig
-from feifeile.flight import FlightOffer, FlightSearchClient, FlightSearchError, _extract_price
+from feifeile.flight import (
+    FlightOffer,
+    FlightSearchClient,
+    FlightSearchError,
+    _extract_price,
+    _extract_price_from_itinerary,
+    _extract_itineraries,
+    _itinerary_to_offer,
+)
 
 # 新版航班搜索端点（普通查询与会员价使用同一路径）
 _SEARCH_URL_SUFFIX = "/ticket/lfs/airLowFareSearch"
+
+
+def _make_itinerary(
+    flight_no: str = "7822",
+    airline: str = "HU",
+    dep_airport: str = "HAK",
+    arr_airport: str = "PEK",
+    dep_date: str = "2025-02-01",
+    dep_time: str = "08:00",
+    arr_time: str = "12:00",
+    cabin: str = "Y",
+    price: float = 199,
+    seats: int = 5,
+    sold_out: str = "0",
+) -> dict:
+    """构造一个逼真的 airItinerary 对象（与 HNA API 一致）。"""
+    return {
+        "flightSegments": [
+            {
+                "marketingAirlineCode": airline,
+                "flightNumber": flight_no,
+                "departureAirportCode": dep_airport,
+                "arrivalAirportCode": arr_airport,
+                "departureDate": dep_date,
+                "departureTime": dep_time,
+                "arrivalTime": arr_time,
+                "bookingClass": cabin,
+            }
+        ],
+        "minLowPriceWithTax": price,
+        "lowestPrice": price - 50,
+        "minLowPrice": price - 50,
+        "inventoryQuantity": seats,
+        "soldOut": sold_out,
+    }
+
+
+def _wrap_response(itineraries: list[dict], success: bool = True) -> dict:
+    """将 airItinerary 列表包装为完整 API 响应。"""
+    return {
+        "success": success,
+        "data": {
+            "originDestinations": [
+                {"airItineraries": itineraries}
+            ],
+        },
+    }
 
 
 @pytest.fixture
@@ -43,6 +98,10 @@ def _search_url(cfg: HNAConfig) -> str:
     return f"{cfg.base_url}{_SEARCH_URL_SUFFIX}"
 
 
+# ===================================================================
+# 价格提取
+# ===================================================================
+
 class TestExtractPrice:
     def test_price_field(self):
         assert _extract_price({"price": "199.0"}) == 199.0
@@ -59,6 +118,83 @@ class TestExtractPrice:
     def test_invalid_price(self):
         assert _extract_price({"price": "abc"}) is None
 
+
+class TestExtractPriceFromItinerary:
+    def test_min_low_price_with_tax(self):
+        assert _extract_price_from_itinerary({"minLowPriceWithTax": 299}) == 299.0
+
+    def test_lowest_price(self):
+        assert _extract_price_from_itinerary({"lowestPrice": 199}) == 199.0
+
+    def test_from_itinerary_prices(self):
+        item = {
+            "airItineraryPrices": [
+                {
+                    "travelerPrices": [
+                        {"farePrices": [{"totalFare": "399"}]}
+                    ]
+                }
+            ]
+        }
+        assert _extract_price_from_itinerary(item) == 399.0
+
+    def test_no_price(self):
+        assert _extract_price_from_itinerary({}) is None
+
+    def test_zero_price_skipped(self):
+        assert _extract_price_from_itinerary({"minLowPriceWithTax": 0}) is None
+
+
+# ===================================================================
+# 行程提取
+# ===================================================================
+
+class TestExtractItineraries:
+    def test_origin_destinations_format(self):
+        data = {
+            "originDestinations": [
+                {"airItineraries": [{"id": "1"}, {"id": "2"}]}
+            ]
+        }
+        assert len(_extract_itineraries(data)) == 2
+
+    def test_flat_flight_list_fallback(self):
+        data = {"flightList": [{"id": "1"}]}
+        assert len(_extract_itineraries(data)) == 1
+
+    def test_empty_response(self):
+        assert _extract_itineraries({}) == []
+
+
+# ===================================================================
+# 行程 → FlightOffer 转换
+# ===================================================================
+
+class TestItineraryToOffer:
+    def test_nested_format(self):
+        itin = _make_itinerary(price=199)
+        offer = _itinerary_to_offer(itin, "HAK", "PEK", "2025-02-01", is_member=False)
+        assert offer is not None
+        assert offer.flight_no == "HU7822"
+        assert offer.price == 199.0
+        assert offer.origin == "HAK"
+        assert not offer.is_member_price
+
+    def test_sold_out_skipped(self):
+        itin = _make_itinerary(sold_out="1")
+        assert _itinerary_to_offer(itin, "HAK", "PEK", "2025-02-01", is_member=False) is None
+
+    def test_flat_format_fallback(self):
+        item = {"flightNo": "HU7822", "price": "199"}
+        offer = _itinerary_to_offer(item, "HAK", "PEK", "2025-02-01", is_member=True)
+        assert offer is not None
+        assert offer.flight_no == "HU7822"
+        assert offer.is_member_price
+
+
+# ===================================================================
+# FlightOffer __str__
+# ===================================================================
 
 class TestFlightOffer:
     def test_str_normal(self):
@@ -91,37 +227,18 @@ class TestFlightOffer:
         assert "【会员特价】" in str(offer)
 
 
+# ===================================================================
+# FlightSearchClient.search 端到端
+# ===================================================================
+
 class TestFlightSearchClient:
     @pytest.mark.asyncio
     async def test_search_returns_qualified_flights(self, hna_config, mock_auth):
-        flight_response = {
-            "success": True,
-            "data": {
-                "flightList": [
-                    {
-                        "flightNo": "HU7822",
-                        "dptAirport": "HAK",
-                        "arrAirport": "PEK",
-                        "dptTime": "08:00",
-                        "arrTime": "12:00",
-                        "cabinClass": "Y",
-                        "price": "199",
-                        "seatCount": "5",
-                    },
-                    {
-                        "flightNo": "HU7824",
-                        "dptAirport": "HAK",
-                        "arrAirport": "PEK",
-                        "dptTime": "14:00",
-                        "arrTime": "18:00",
-                        "cabinClass": "Y",
-                        "price": "500",  # 超过阈值
-                        "seatCount": "10",
-                    },
-                ]
-            },
-        }
-        member_response = {"success": True, "data": {"fareList": []}}
+        flight_response = _wrap_response([
+            _make_itinerary(flight_no="7822", price=199),
+            _make_itinerary(flight_no="7824", dep_time="14:00", arr_time="18:00", price=500),
+        ])
+        member_response = _wrap_response([])
 
         with respx.mock:
             route = respx.post(_search_url(hna_config))
@@ -141,38 +258,12 @@ class TestFlightSearchClient:
     @pytest.mark.asyncio
     async def test_search_member_price_overrides(self, hna_config, mock_auth):
         """会员价应覆盖同航班的普通价。"""
-        flight_response = {
-            "success": True,
-            "data": {
-                "flightList": [
-                    {
-                        "flightNo": "HU7822",
-                        "dptAirport": "HAK",
-                        "arrAirport": "PEK",
-                        "dptTime": "08:00",
-                        "arrTime": "12:00",
-                        "cabinClass": "Y",
-                        "price": "299",
-                    },
-                ]
-            },
-        }
-        member_response = {
-            "success": True,
-            "data": {
-                "fareList": [
-                    {
-                        "flightNo": "HU7822",
-                        "dptAirport": "HAK",
-                        "arrAirport": "PEK",
-                        "dptTime": "08:00",
-                        "arrTime": "12:00",
-                        "cabinClass": "Y",
-                        "price": "199",  # 会员特价
-                    }
-                ]
-            },
-        }
+        flight_response = _wrap_response([
+            _make_itinerary(flight_no="7822", price=299),
+        ])
+        member_response = _wrap_response([
+            _make_itinerary(flight_no="7822", price=199),
+        ])
 
         with respx.mock:
             route = respx.post(_search_url(hna_config))
@@ -190,18 +281,10 @@ class TestFlightSearchClient:
 
     @pytest.mark.asyncio
     async def test_search_no_qualified_flights(self, hna_config, mock_auth):
-        flight_response = {
-            "success": True,
-            "data": {
-                "flightList": [
-                    {
-                        "flightNo": "HU7822",
-                        "price": "500",
-                    }
-                ]
-            },
-        }
-        member_response = {"success": True, "data": {"fareList": []}}
+        flight_response = _wrap_response([
+            _make_itinerary(flight_no="7822", price=500),
+        ])
+        member_response = _wrap_response([])
 
         with respx.mock:
             route = respx.post(_search_url(hna_config))
@@ -235,22 +318,9 @@ class TestFlightSearchClient:
     @pytest.mark.asyncio
     async def test_search_gracefully_handles_partial_failure(self, hna_config, mock_auth):
         """普通查询失败时，会员价查询结果仍应返回。"""
-        member_response = {
-            "success": True,
-            "data": {
-                "fareList": [
-                    {
-                        "flightNo": "HU7822",
-                        "dptAirport": "HAK",
-                        "arrAirport": "PEK",
-                        "dptTime": "08:00",
-                        "arrTime": "12:00",
-                        "cabinClass": "Y",
-                        "price": "199",
-                    }
-                ]
-            },
-        }
+        member_response = _wrap_response([
+            _make_itinerary(flight_no="7822", price=199),
+        ])
 
         with respx.mock:
             route = respx.post(_search_url(hna_config))
@@ -268,24 +338,10 @@ class TestFlightSearchClient:
     @pytest.mark.asyncio
     async def test_retry_on_504_then_success(self, hna_config, mock_auth):
         """504 网关超时应自动重试并最终返回结果。"""
-        flight_response = {
-            "success": True,
-            "data": {
-                "flightList": [
-                    {
-                        "flightNo": "HU7822",
-                        "dptAirport": "HAK",
-                        "arrAirport": "PEK",
-                        "dptTime": "08:00",
-                        "arrTime": "12:00",
-                        "cabinClass": "Y",
-                        "price": "199",
-                        "seatCount": "5",
-                    },
-                ]
-            },
-        }
-        member_response = {"success": True, "data": {"fareList": []}}
+        flight_response = _wrap_response([
+            _make_itinerary(flight_no="7822", price=199),
+        ])
+        member_response = _wrap_response([])
 
         with respx.mock:
             route = respx.post(_search_url(hna_config))
@@ -312,18 +368,10 @@ class TestFlightSearchClient:
     @pytest.mark.asyncio
     async def test_retry_network_error_then_success(self, hna_config, mock_auth):
         """网络异常应自动重试。"""
-        flight_response = {
-            "success": True,
-            "data": {
-                "flightList": [
-                    {
-                        "flightNo": "HU7830",
-                        "price": "150",
-                    },
-                ]
-            },
-        }
-        member_response = {"success": True, "data": {"fareList": []}}
+        flight_response = _wrap_response([
+            _make_itinerary(flight_no="7830", price=150),
+        ])
+        member_response = _wrap_response([])
 
         with respx.mock:
             route = respx.post(_search_url(hna_config))
@@ -346,3 +394,25 @@ class TestFlightSearchClient:
         assert offers[0].price == 150.0
         # 3 calls: network error retry + flight query success + member query (same endpoint)
         assert route.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_sold_out_flights_excluded(self, hna_config, mock_auth):
+        """已售罄航班不应出现在结果中。"""
+        flight_response = _wrap_response([
+            _make_itinerary(flight_no="7822", price=199, sold_out="1"),
+            _make_itinerary(flight_no="7824", price=150, sold_out="0"),
+        ])
+        member_response = _wrap_response([])
+
+        with respx.mock:
+            route = respx.post(_search_url(hna_config))
+            route.side_effect = [
+                httpx.Response(200, json=flight_response),
+                httpx.Response(200, json=member_response),
+            ]
+
+            client = FlightSearchClient(hna_config, mock_auth)
+            offers = await client.search("HAK", "PEK", date(2025, 2, 1), threshold=199.0)
+
+        assert len(offers) == 1
+        assert offers[0].flight_no == "HU7824"

@@ -204,13 +204,7 @@ class FlightSearchClient:
         result = await self._post(
             url, body, headers, params=query,
         )
-        flights: list[dict[str, Any]] = (
-            result.get("flightList")
-            or result.get("flights")
-            or result.get("data")
-            or []
-        )
-        return flights
+        return _extract_itineraries(result)
 
     async def _query_member_fares(
         self,
@@ -249,13 +243,7 @@ class FlightSearchClient:
         result = await self._post(
             url, body, headers, params=query,
         )
-        fares: list[dict[str, Any]] = (
-            result.get("fareList")
-            or result.get("fares")
-            or result.get("data")
-            or []
-        )
-        return fares
+        return _extract_itineraries(result)
 
     async def _post(
         self,
@@ -333,25 +321,11 @@ class FlightSearchClient:
         offers: list[FlightOffer] = []
         for item in raw:
             try:
-                price = _extract_price(item)
-                if price is None:
-                    continue
-                offers.append(
-                    FlightOffer(
-                        flight_no=item.get("flightNo") or item.get("flight_no") or "",
-                        origin=item.get("dptAirport") or item.get("dptCity") or origin,
-                        destination=item.get("arrAirport") or item.get("arrCity") or destination,
-                        depart_date=date_str,
-                        depart_time=item.get("dptTime") or item.get("departTime") or "",
-                        arrive_time=item.get("arrTime") or item.get("arrivalTime") or "",
-                        cabin_class=item.get("cabinClass") or item.get("cabin") or "Y",
-                        price=price,
-                        seats_remaining=int(item.get("seatCount") or item.get("seats") or 0),
-                        is_member_price=False,
-                    )
-                )
+                offer = _itinerary_to_offer(item, origin, destination, date_str, is_member=False)
+                if offer is not None:
+                    offers.append(offer)
             except (KeyError, TypeError, ValueError) as exc:
-                logger.debug("跳过无效航班数据 {}: {}", item, exc)
+                logger.debug("跳过无效航班数据: {}", exc)
         return offers
 
     @staticmethod
@@ -364,30 +338,160 @@ class FlightSearchClient:
         offers: list[FlightOffer] = []
         for item in raw:
             try:
-                price = _extract_price(item)
-                if price is None:
-                    continue
-                offers.append(
-                    FlightOffer(
-                        flight_no=item.get("flightNo") or item.get("flight_no") or "",
-                        origin=item.get("dptAirport") or item.get("dptCity") or origin,
-                        destination=item.get("arrAirport") or item.get("arrCity") or destination,
-                        depart_date=date_str,
-                        depart_time=item.get("dptTime") or item.get("departTime") or "",
-                        arrive_time=item.get("arrTime") or item.get("arrivalTime") or "",
-                        cabin_class=item.get("cabinClass") or item.get("cabin") or "Y",
-                        price=price,
-                        seats_remaining=int(item.get("seatCount") or item.get("seats") or 0),
-                        is_member_price=True,
-                    )
-                )
+                offer = _itinerary_to_offer(item, origin, destination, date_str, is_member=True)
+                if offer is not None:
+                    offers.append(offer)
             except (KeyError, TypeError, ValueError) as exc:
-                logger.debug("跳过无效会员票数据 {}: {}", item, exc)
+                logger.debug("跳过无效会员票数据: {}", exc)
         return offers
 
 
+def _extract_itineraries(result: dict[str, Any]) -> list[dict[str, Any]]:
+    """从 API 响应 data 中提取航班行程列表。
+
+    HNA airLowFareSearch 响应格式::
+
+        {
+            "originDestinations": [
+                {
+                    "airItineraries": [ ... ]
+                }
+            ]
+        }
+    """
+    # 新版 API：originDestinations[0].airItineraries
+    ods = result.get("originDestinations") or []
+    if ods:
+        itineraries: list[dict[str, Any]] = []
+        for od in ods:
+            items = od.get("airItineraries") or []
+            itineraries.extend(items)
+        if itineraries:
+            logger.debug("从 originDestinations 提取到 {} 条航班", len(itineraries))
+            return itineraries
+
+    # 兼容旧版扁平格式
+    for key in ("flightList", "flights", "airItineraries"):
+        val = result.get(key)
+        if isinstance(val, list) and val:
+            logger.debug("从 {} 提取到 {} 条航班", key, len(val))
+            return val
+
+    logger.warning("API 响应中未找到航班数据，响应 keys: {}", list(result.keys()))
+    return []
+
+
+def _itinerary_to_offer(
+    item: dict[str, Any],
+    origin: str,
+    destination: str,
+    date_str: str,
+    *,
+    is_member: bool,
+) -> FlightOffer | None:
+    """将一条 airItinerary 转换为 FlightOffer。
+
+    支持两种格式：
+    1. 新版嵌套格式（flightSegments + minLowPriceWithTax）
+    2. 旧版扁平格式（flightNo + price）
+    """
+    segments = item.get("flightSegments") or []
+
+    if segments:
+        # ---- 新版嵌套格式 ----
+        seg = segments[0]
+        airline = seg.get("marketingAirlineCode") or ""
+        flight_num = seg.get("flightNumber") or ""
+        flight_no = f"{airline}{flight_num}" if airline and flight_num else (airline or flight_num)
+
+        dep_airport = seg.get("departureAirportCode") or origin
+        arr_airport = seg.get("arrivalAirportCode") or destination
+        dep_time = seg.get("departureTime") or ""
+        arr_time = seg.get("arrivalTime") or ""
+        cabin = seg.get("bookingClass") or "Y"
+
+        # 已售罄跳过
+        sold_out = item.get("soldOut")
+        if sold_out == "1" or sold_out is True:
+            logger.debug("航班 {} 已售罄，跳过", flight_no)
+            return None
+
+        price = _extract_price_from_itinerary(item)
+        if price is None:
+            logger.debug("航班 {} 无有效价格，跳过", flight_no)
+            return None
+
+        seats = int(item.get("inventoryQuantity") or item.get("seatCount") or 0)
+
+        return FlightOffer(
+            flight_no=flight_no,
+            origin=dep_airport,
+            destination=arr_airport,
+            depart_date=seg.get("departureDate") or date_str,
+            depart_time=dep_time,
+            arrive_time=arr_time,
+            cabin_class=cabin,
+            price=price,
+            seats_remaining=seats,
+            is_member_price=is_member,
+        )
+
+    # ---- 旧版扁平格式（兼容） ----
+    price = _extract_price(item)
+    if price is None:
+        return None
+    return FlightOffer(
+        flight_no=item.get("flightNo") or item.get("flight_no") or "",
+        origin=item.get("dptAirport") or item.get("dptCity") or origin,
+        destination=item.get("arrAirport") or item.get("arrCity") or destination,
+        depart_date=date_str,
+        depart_time=item.get("dptTime") or item.get("departTime") or "",
+        arrive_time=item.get("arrTime") or item.get("arrivalTime") or "",
+        cabin_class=item.get("cabinClass") or item.get("cabin") or "Y",
+        price=price,
+        seats_remaining=int(item.get("seatCount") or item.get("seats") or 0),
+        is_member_price=is_member,
+    )
+
+
+def _extract_price_from_itinerary(item: dict[str, Any]) -> float | None:
+    """从 airItinerary 中提取最低含税票价。
+
+    优先级：minLowPriceWithTax > lowestPrice > minLowPrice >
+            airItineraryPrices[0].travelerPrices[0].farePrices[0].totalFare
+    """
+    for key in (
+        "minLowPriceWithTax", "lowestPrice", "minLowPrice",
+        "minLowPriceWithTaxY", "lowestPriceY",
+    ):
+        val = item.get(key)
+        if val is not None:
+            try:
+                p = float(val)
+                if p > 0:
+                    return p
+            except (TypeError, ValueError):
+                continue
+
+    # 尝试从 airItineraryPrices 中提取
+    prices = item.get("airItineraryPrices") or []
+    if prices:
+        try:
+            tp = prices[0].get("travelerPrices") or []
+            if tp:
+                fp = tp[0].get("farePrices") or []
+                if fp:
+                    total = fp[0].get("totalFare")
+                    if total is not None:
+                        return float(total)
+        except (IndexError, KeyError, TypeError, ValueError):
+            pass
+
+    return None
+
+
 def _extract_price(item: dict[str, Any]) -> float | None:
-    """从不同字段名中提取最低票价（元）。"""
+    """从扁平格式数据中提取票价（兼容旧版 API 响应）。"""
     for key in ("price", "salePrice", "lowestPrice", "minPrice", "totalPrice", "fare"):
         val = item.get(key)
         if val is not None:
