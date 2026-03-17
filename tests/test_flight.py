@@ -20,6 +20,7 @@ from feifeile.flight import (
     _extract_price_from_itinerary,
     _extract_itineraries,
     _itinerary_to_offer,
+    _safe_int,
 )
 
 # 新版航班搜索端点（普通查询与会员价使用同一路径）
@@ -146,6 +147,37 @@ class TestExtractPriceFromItinerary:
 
 
 # ===================================================================
+# _safe_int 安全整数转换
+# ===================================================================
+
+class TestSafeInt:
+    def test_numeric_string(self):
+        assert _safe_int("5") == 5
+
+    def test_int_value(self):
+        assert _safe_int(10) == 10
+
+    def test_non_numeric_string(self):
+        assert _safe_int("A") == 0
+
+    def test_non_numeric_string_custom_default(self):
+        assert _safe_int("A", default=-1) == -1
+
+    def test_none_value(self):
+        assert _safe_int(None) == 0
+
+    def test_empty_string(self):
+        assert _safe_int("") == 0
+
+    def test_float_string(self):
+        # "3.5" 不是合法 int 字符串，应返回 default
+        assert _safe_int("3.5") == 0
+
+    def test_zero_string(self):
+        assert _safe_int("0") == 0
+
+
+# ===================================================================
 # 行程提取
 # ===================================================================
 
@@ -195,6 +227,67 @@ class TestItineraryToOffer:
         assert offer is not None
         assert offer.flight_no == "HU7822"
         assert offer.is_member_price
+
+    def test_non_numeric_inventory_quantity(self):
+        """inventoryQuantity 为非数字字符串 'A' 时不应崩溃。"""
+        itin = _make_itinerary(price=199)
+        itin["inventoryQuantity"] = "A"
+        offer = _itinerary_to_offer(itin, "HAK", "PEK", "2025-02-01", is_member=True)
+        assert offer is not None
+        assert offer.seats_remaining == 0
+        assert offer.price == 199.0
+
+    def test_actual_api_segment_format(self):
+        """使用实际 HNA API 返回的航段格式验证解析。"""
+        actual_segment = {
+            "cabinClass": "",
+            "charter": False,
+            "cutoffTime": "38",
+            "bookingClass": "",
+            "displayAircraftName": "空客320",
+            "arrivalTime": "12:20",
+            "id": "FLT-PN6333#SZX-TNA-20260404",
+            "international": False,
+            "operatingAirlineCode": "PN",
+            "departureAirportCode": "SZX",
+            "arrivalAirportCode": "TNA",
+            "flightNumber": "6333",
+            "arrivalDate": "2026-04-04",
+            "departureTime": "09:40",
+            "departureDate": "2026-04-04",
+            "departureTerminal": "T3",
+            "marketingAirlineCode": "PN",
+            "aircraftCode": "320",
+            "stopQuantity": 0,
+            "duration": 160,
+        }
+        itin = {
+            "flightSegments": [actual_segment],
+            "minLowPriceWithTax": 399,
+            "lowestPrice": 349,
+            "inventoryQuantity": "A",
+            "soldOut": "0",
+        }
+        offer = _itinerary_to_offer(itin, "SZX", "TNA", "2026-04-04", is_member=True)
+        assert offer is not None
+        assert offer.flight_no == "PN6333"
+        assert offer.origin == "SZX"
+        assert offer.destination == "TNA"
+        assert offer.depart_time == "09:40"
+        assert offer.arrive_time == "12:20"
+        assert offer.depart_date == "2026-04-04"
+        assert offer.price == 399.0
+        assert offer.seats_remaining == 0  # 'A' → default 0
+        assert offer.cabin_class == "Y"  # empty bookingClass & cabinClass → default "Y"
+        assert offer.is_member_price
+
+    def test_cabin_class_fallback_to_cabin_class_field(self):
+        """bookingClass 为空时应回退到 cabinClass 字段。"""
+        itin = _make_itinerary(cabin="", price=199)
+        itin["flightSegments"][0]["cabinClass"] = "W"
+        offer = _itinerary_to_offer(itin, "HAK", "PEK", "2025-02-01", is_member=False)
+        assert offer is not None
+        assert offer.cabin_class == "W"
 
 
 # ===================================================================

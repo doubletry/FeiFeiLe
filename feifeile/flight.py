@@ -427,7 +427,7 @@ def _itinerary_to_offer(
         arr_airport = seg.get("arrivalAirportCode") or destination
         dep_time = seg.get("departureTime") or ""
         arr_time = seg.get("arrivalTime") or ""
-        cabin = seg.get("bookingClass") or "Y"
+        cabin = seg.get("bookingClass") or seg.get("cabinClass") or "Y"
 
         # 已售罄跳过
         sold_out = item.get("soldOut")
@@ -441,7 +441,7 @@ def _itinerary_to_offer(
             return None
 
         inv = item.get("inventoryQuantity")
-        seats = int(inv if inv is not None else (item.get("seatCount") or 0))
+        seats = _safe_int(inv if inv is not None else item.get("seatCount"), default=0)
 
         return FlightOffer(
             flight_no=flight_no,
@@ -469,9 +469,19 @@ def _itinerary_to_offer(
         arrive_time=item.get("arrTime") or item.get("arrivalTime") or "",
         cabin_class=item.get("cabinClass") or item.get("cabin") or "Y",
         price=price,
-        seats_remaining=int(item.get("seatCount") or item.get("seats") or 0),
+        seats_remaining=_safe_int(item.get("seatCount") or item.get("seats"), default=0),
         is_member_price=is_member,
     )
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    """安全地将值转换为整数，非数值型（如 'A'）返回 default。"""
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _extract_price_from_itinerary(item: dict[str, Any]) -> float | None:
