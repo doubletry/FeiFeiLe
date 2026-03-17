@@ -14,7 +14,7 @@ class TestHNAConfig:
         cfg = HNAConfig()
         assert cfg.username == "13800000000"
         assert cfg.password == "secret"
-        assert cfg.app_version == "7.8.0"
+        assert cfg.app_version == "10.12.0"
         assert cfg.max_retries == 3
         assert "hnair" in cfg.base_url
 

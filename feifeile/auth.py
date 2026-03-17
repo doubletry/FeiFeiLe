@@ -3,14 +3,20 @@
 实现模拟移动端登录、Token 获取与刷新。
 海南航空移动 API 使用 Bearer Token 认证；Token 有效期约 2 小时，
 本模块在每次请求前检查有效期并自动刷新。
+
+请求签名算法（hnairSign）和公共参数构建也在此模块中定义，
+供 flight 等模块复用。
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
+import hmac
+import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -18,25 +24,132 @@ from loguru import logger
 
 from feifeile.config import HNAConfig
 
-# 模拟 Android 客户端请求头，与真实 App 保持一致以避免服务端拒绝
-_DEFAULT_HEADERS = {
-    "Content-Type": "application/json;charset=UTF-8",
-    "Accept": "application/json",
-    "User-Agent": "HNA/{app_version} (Android; HNClient)",
-    "X-Channel": "Android",
-    "X-Client-Type": "app",
+# ---------------------------------------------------------------------------
+# RSA 公钥（用于密码加密，来自 HNA Web App JS）
+# ---------------------------------------------------------------------------
+_RSA_EXPONENT = 0x10001
+_RSA_MODULUS = int(
+    "BA58236D7F337C2B728A05F31028833AF83220330B129DC2407109776B644492"
+    "BD7BBD8B15498C9C510B915FC4C559FE986F61867337785DB32C284C4E07FF2"
+    "56965DE53490CBBA28F14D413D407986ED3DF0E03032031EDD97054C3E6F4F8"
+    "B322238EB5B0249556F99D9182B281F04B18CE9155332AF71C8A1A2E49087A571B",
+    16,
+)
+_RSA_KEY_SIZE = 128  # 1024 bits
+
+# ---------------------------------------------------------------------------
+# 请求头模板
+# ---------------------------------------------------------------------------
+_DEFAULT_HEADERS: dict[str, str] = {
+    "Content-Type": "application/json",
+    "appver": "{app_version}",
+    "hna-app": "APP",
+    "hna-channel": "HTML5",
 }
 
-# 遇到以下 HTTP 状态码时自动重试（网关/上游瞬态故障）
+# ---------------------------------------------------------------------------
+# 重试配置
+# ---------------------------------------------------------------------------
 _RETRYABLE_STATUS_CODES = {502, 503, 504}
-# 首次重试等待秒数，后续指数退避 (2s → 4s → 8s ...)
 _RETRY_BASE_DELAY = 2.0
 
-# 登录接口路径
-_LOGIN_PATH = "/hnapps/member/login/password"
-# Token 刷新路径
-_REFRESH_PATH = "/hnapps/member/login/refresh"
+# ---------------------------------------------------------------------------
+# 接口路径
+# ---------------------------------------------------------------------------
+_LOGIN_PATH = "/mapp/webservice/v2/common/auth/login"
+_REFRESH_PATH = "/mapp/webservice/v2/common/auth/refresh"
 
+
+# ===================================================================
+# 公共函数：签名 & 请求参数
+# ===================================================================
+
+def _build_common_params(config: HNAConfig) -> dict[str, Any]:
+    """构建所有请求通用的 ``common`` 参数块。"""
+    return {
+        "sname": "Linux",
+        "sver": "5.0",
+        "schannel": "HTML5",
+        "caller": "HTML5",
+        "slang": "zh-CN",
+        "did": config.device_id,
+        "stime": int(time.time() * 1000),
+        "szone": -480,
+        "aname": "com.hnair.spa.web.standard",
+        "aver": config.app_version,
+        "akey": config.akey,
+        "abuild": "63741",
+        "atarget": "standard",
+        "slat": "slat",
+        "slng": "slng",
+        "gtcid": "defualt_web_gtcid",
+        "riskToken": "",
+        "captchaToken": "",
+        "blackBox": "",
+        "validateToken": "",
+    }
+
+
+def _compute_sign(
+    headers: dict[str, str],
+    query_params: dict[str, str],
+    body_params: dict[str, Any],
+    certificate_hash: str,
+    hard_code: str,
+) -> str:
+    """计算 hnairSign（HMAC-SHA1），返回大写十六进制摘要。"""
+    values: list[str] = []
+
+    # 1. Header values for keys starting with "hna" (sorted)
+    for k in sorted(k for k in headers if k.lower().startswith("hna")):
+        values.append(str(headers[k]))
+
+    # 2. Body values for sorted keys (only primitives)
+    for k in sorted(body_params.keys()):
+        v = body_params[k]
+        if isinstance(v, bool):
+            values.append("true" if v else "false")
+        elif isinstance(v, (str, int, float)):
+            values.append(str(v))
+
+    # 3. Query param values for sorted keys
+    for k in sorted(query_params.keys()):
+        values.append(str(query_params[k]))
+
+    raw = "".join(values) + certificate_hash
+    return hmac.new(
+        hard_code.encode(), raw.encode(), hashlib.sha1
+    ).hexdigest().upper()
+
+
+# ===================================================================
+# RSA 加密（PKCS#1 v1.5，用于密码传输）
+# ===================================================================
+
+def _rsa_encrypt(plaintext: str) -> str:
+    """使用 RSA 公钥加密明文并返回 Base64 字符串。"""
+    msg = plaintext.encode("utf-8")
+    padding_len = _RSA_KEY_SIZE - 3 - len(msg)
+    if padding_len < 8:
+        raise ValueError("Message too long for RSA key size")
+
+    # PKCS#1 v1.5: 0x00 0x02 <random non-zero bytes> 0x00 <message>
+    padding = bytearray()
+    while len(padding) < padding_len:
+        byte = os.urandom(1)[0]
+        if byte != 0:
+            padding.append(byte)
+    padded = b"\x00\x02" + bytes(padding) + b"\x00" + msg
+
+    msg_int = int.from_bytes(padded, "big")
+    encrypted_int = pow(msg_int, _RSA_EXPONENT, _RSA_MODULUS)
+    encrypted_bytes = encrypted_int.to_bytes(_RSA_KEY_SIZE, "big")
+    return base64.b64encode(encrypted_bytes).decode("ascii")
+
+
+# ===================================================================
+# 数据类 & 异常
+# ===================================================================
 
 @dataclass
 class AuthToken:
@@ -44,7 +157,6 @@ class AuthToken:
 
     access_token: str
     refresh_token: str
-    # Unix 时间戳（秒），到期后需刷新
     expires_at: float
     member_id: str = ""
 
@@ -61,6 +173,10 @@ class AuthToken:
 class AuthError(Exception):
     """认证相关错误"""
 
+
+# ===================================================================
+# 认证客户端
+# ===================================================================
 
 class HNAAuth:
     """海南航空移动端认证客户端
@@ -106,41 +222,58 @@ class HNAAuth:
             for k, v in _DEFAULT_HEADERS.items()
         }
 
-    @staticmethod
-    def _md5(text: str) -> str:
-        return hashlib.md5(text.encode()).hexdigest()
-
     async def _login(self) -> None:
         """使用账号密码登录，获取 Token。"""
-        payload = {
+        data_params: dict[str, Any] = {
             "loginName": self._config.username,
-            # 密码以 MD5 传输（遵循 App 实际行为）
-            "loginPwd": self._md5(self._config.password),
-            "loginType": "1",  # 1=密码登录
-            "deviceId": self._config.device_id,
-            "appVersion": self._config.app_version,
+            "loginPwd": _rsa_encrypt(self._config.password),
+            "loginType": "1",
+        }
+        body = {
+            "common": _build_common_params(self._config),
+            "data": data_params,
         }
         url = f"{self._config.base_url}{_LOGIN_PATH}"
+        headers = self._build_headers()
+        sign = _compute_sign(
+            headers, {}, data_params,
+            self._config.certificate_hash, self._config.hard_code,
+        )
         logger.info("正在登录海南航空账号: {}", self._config.username)
-        data = await self._post(url, payload)
-        self._token = self._parse_token(data)
+        result = await self._post(url, body, headers, params={"hnairSign": sign})
+        self._token = self._parse_token(result)
         logger.info("登录成功，会员 ID: {}", self._token.member_id)
 
     async def _refresh(self) -> None:
         """使用 Refresh Token 刷新 Access Token。"""
         if self._token is None:
             raise AuthError("无可刷新的 Token")
-        payload = {
+        data_params: dict[str, Any] = {
             "refreshToken": self._token.refresh_token,
-            "deviceId": self._config.device_id,
+        }
+        body = {
+            "common": _build_common_params(self._config),
+            "data": data_params,
         }
         url = f"{self._config.base_url}{_REFRESH_PATH}"
+        headers = self._build_headers()
+        sign = _compute_sign(
+            headers, {}, data_params,
+            self._config.certificate_hash, self._config.hard_code,
+        )
         logger.debug("正在刷新 Token")
-        data = await self._post(url, payload)
-        self._token = self._parse_token(data)
+        result = await self._post(url, body, headers, params={"hnairSign": sign})
+        self._token = self._parse_token(result)
         logger.debug("Token 刷新成功")
 
-    async def _post(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
+    async def _post(
+        self,
+        url: str,
+        payload: dict[str, Any],
+        headers: dict[str, str],
+        *,
+        params: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         """发送 POST 请求并返回业务数据字典。
 
         对 502/503/504 等网关瞬态错误自动重试（指数退避）。
@@ -151,7 +284,7 @@ class HNAAuth:
             for attempt in range(max_retries + 1):
                 try:
                     resp = await client.post(
-                        url, json=payload, headers=self._build_headers()
+                        url, json=payload, headers=headers, params=params,
                     )
                     if resp.status_code in _RETRYABLE_STATUS_CODES and attempt < max_retries:
                         wait = _RETRY_BASE_DELAY * (2 ** attempt)
@@ -180,10 +313,10 @@ class HNAAuth:
                     break
 
         body: dict[str, Any] = resp.json()
-        code = body.get("code") or body.get("resultCode") or body.get("status")
-        if str(code) not in ("0", "200", "success", "SUCCESS"):
+        if not body.get("success", False):
             raise AuthError(
-                f"业务错误 code={code}: {body.get('msg') or body.get('message')}"
+                f"业务错误 {body.get('errorCode')}: "
+                f"{body.get('errorMessage')}"
             )
         return body.get("data") or body
 

@@ -14,6 +14,9 @@ from feifeile.auth import AuthToken, HNAAuth
 from feifeile.config import HNAConfig
 from feifeile.flight import FlightOffer, FlightSearchClient, FlightSearchError, _extract_price
 
+# 新版航班搜索端点（普通查询与会员价使用同一路径）
+_SEARCH_URL_SUFFIX = "/ticket/lfs/airLowFareSearch"
+
 
 @pytest.fixture
 def hna_config(monkeypatch):
@@ -34,6 +37,10 @@ def mock_auth(hna_config):
     )
     auth.invalidate = AsyncMock()
     return auth
+
+
+def _search_url(cfg: HNAConfig) -> str:
+    return f"{cfg.base_url}{_SEARCH_URL_SUFFIX}"
 
 
 class TestExtractPrice:
@@ -88,7 +95,7 @@ class TestFlightSearchClient:
     @pytest.mark.asyncio
     async def test_search_returns_qualified_flights(self, hna_config, mock_auth):
         flight_response = {
-            "code": "0",
+            "success": True,
             "data": {
                 "flightList": [
                     {
@@ -114,15 +121,14 @@ class TestFlightSearchClient:
                 ]
             },
         }
-        member_response = {"code": "0", "data": {"fareList": []}}
+        member_response = {"success": True, "data": {"fareList": []}}
 
         with respx.mock:
-            respx.post(
-                f"{hna_config.base_url}/hnapps/flight/queryFlightInfo"
-            ).mock(return_value=httpx.Response(200, json=flight_response))
-            respx.post(
-                f"{hna_config.base_url}/hnapps/member/flight/memberFares"
-            ).mock(return_value=httpx.Response(200, json=member_response))
+            route = respx.post(_search_url(hna_config))
+            route.side_effect = [
+                httpx.Response(200, json=flight_response),
+                httpx.Response(200, json=member_response),
+            ]
 
             client = FlightSearchClient(hna_config, mock_auth)
             offers = await client.search("HAK", "PEK", date(2025, 2, 1), threshold=199.0)
@@ -136,7 +142,7 @@ class TestFlightSearchClient:
     async def test_search_member_price_overrides(self, hna_config, mock_auth):
         """会员价应覆盖同航班的普通价。"""
         flight_response = {
-            "code": "0",
+            "success": True,
             "data": {
                 "flightList": [
                     {
@@ -152,7 +158,7 @@ class TestFlightSearchClient:
             },
         }
         member_response = {
-            "code": "0",
+            "success": True,
             "data": {
                 "fareList": [
                     {
@@ -169,12 +175,11 @@ class TestFlightSearchClient:
         }
 
         with respx.mock:
-            respx.post(
-                f"{hna_config.base_url}/hnapps/flight/queryFlightInfo"
-            ).mock(return_value=httpx.Response(200, json=flight_response))
-            respx.post(
-                f"{hna_config.base_url}/hnapps/member/flight/memberFares"
-            ).mock(return_value=httpx.Response(200, json=member_response))
+            route = respx.post(_search_url(hna_config))
+            route.side_effect = [
+                httpx.Response(200, json=flight_response),
+                httpx.Response(200, json=member_response),
+            ]
 
             client = FlightSearchClient(hna_config, mock_auth)
             offers = await client.search("HAK", "PEK", date(2025, 2, 1), threshold=199.0)
@@ -186,7 +191,7 @@ class TestFlightSearchClient:
     @pytest.mark.asyncio
     async def test_search_no_qualified_flights(self, hna_config, mock_auth):
         flight_response = {
-            "code": "0",
+            "success": True,
             "data": {
                 "flightList": [
                     {
@@ -196,15 +201,14 @@ class TestFlightSearchClient:
                 ]
             },
         }
-        member_response = {"code": "0", "data": {"fareList": []}}
+        member_response = {"success": True, "data": {"fareList": []}}
 
         with respx.mock:
-            respx.post(
-                f"{hna_config.base_url}/hnapps/flight/queryFlightInfo"
-            ).mock(return_value=httpx.Response(200, json=flight_response))
-            respx.post(
-                f"{hna_config.base_url}/hnapps/member/flight/memberFares"
-            ).mock(return_value=httpx.Response(200, json=member_response))
+            route = respx.post(_search_url(hna_config))
+            route.side_effect = [
+                httpx.Response(200, json=flight_response),
+                httpx.Response(200, json=member_response),
+            ]
 
             client = FlightSearchClient(hna_config, mock_auth)
             offers = await client.search("HAK", "PEK", date(2025, 2, 1), threshold=199.0)
@@ -214,13 +218,11 @@ class TestFlightSearchClient:
     @pytest.mark.asyncio
     async def test_search_401_invalidates_token(self, hna_config, mock_auth):
         with respx.mock:
-            respx.post(
-                f"{hna_config.base_url}/hnapps/flight/queryFlightInfo"
-            ).mock(return_value=httpx.Response(401))
-            # member price also fails
-            respx.post(
-                f"{hna_config.base_url}/hnapps/member/flight/memberFares"
-            ).mock(return_value=httpx.Response(401))
+            route = respx.post(_search_url(hna_config))
+            route.side_effect = [
+                httpx.Response(401),
+                httpx.Response(401),
+            ]
 
             client = FlightSearchClient(hna_config, mock_auth)
             offers = await client.search("HAK", "PEK", date(2025, 2, 1), threshold=199.0)
@@ -234,7 +236,7 @@ class TestFlightSearchClient:
     async def test_search_gracefully_handles_partial_failure(self, hna_config, mock_auth):
         """普通查询失败时，会员价查询结果仍应返回。"""
         member_response = {
-            "code": "0",
+            "success": True,
             "data": {
                 "fareList": [
                     {
@@ -251,12 +253,11 @@ class TestFlightSearchClient:
         }
 
         with respx.mock:
-            respx.post(
-                f"{hna_config.base_url}/hnapps/flight/queryFlightInfo"
-            ).mock(return_value=httpx.Response(500))
-            respx.post(
-                f"{hna_config.base_url}/hnapps/member/flight/memberFares"
-            ).mock(return_value=httpx.Response(200, json=member_response))
+            route = respx.post(_search_url(hna_config))
+            route.side_effect = [
+                httpx.Response(500),
+                httpx.Response(200, json=member_response),
+            ]
 
             client = FlightSearchClient(hna_config, mock_auth)
             offers = await client.search("HAK", "PEK", date(2025, 2, 1), threshold=199.0)
@@ -268,7 +269,7 @@ class TestFlightSearchClient:
     async def test_retry_on_504_then_success(self, hna_config, mock_auth):
         """504 网关超时应自动重试并最终返回结果。"""
         flight_response = {
-            "code": "0",
+            "success": True,
             "data": {
                 "flightList": [
                     {
@@ -284,19 +285,15 @@ class TestFlightSearchClient:
                 ]
             },
         }
-        member_response = {"code": "0", "data": {"fareList": []}}
+        member_response = {"success": True, "data": {"fareList": []}}
 
         with respx.mock:
-            flight_route = respx.post(
-                f"{hna_config.base_url}/hnapps/flight/queryFlightInfo"
-            )
-            flight_route.side_effect = [
-                httpx.Response(504),
-                httpx.Response(200, json=flight_response),
+            route = respx.post(_search_url(hna_config))
+            route.side_effect = [
+                httpx.Response(504),               # 1st attempt of flight query
+                httpx.Response(200, json=flight_response),  # retry succeeds
+                httpx.Response(200, json=member_response),  # member query
             ]
-            respx.post(
-                f"{hna_config.base_url}/hnapps/member/flight/memberFares"
-            ).mock(return_value=httpx.Response(200, json=member_response))
 
             client = FlightSearchClient(hna_config, mock_auth)
             import feifeile.flight
@@ -309,13 +306,13 @@ class TestFlightSearchClient:
 
         assert len(offers) == 1
         assert offers[0].flight_no == "HU7822"
-        assert flight_route.call_count == 2
+        assert route.call_count == 3
 
     @pytest.mark.asyncio
     async def test_retry_network_error_then_success(self, hna_config, mock_auth):
         """网络异常应自动重试。"""
         flight_response = {
-            "code": "0",
+            "success": True,
             "data": {
                 "flightList": [
                     {
@@ -325,19 +322,15 @@ class TestFlightSearchClient:
                 ]
             },
         }
-        member_response = {"code": "0", "data": {"fareList": []}}
+        member_response = {"success": True, "data": {"fareList": []}}
 
         with respx.mock:
-            flight_route = respx.post(
-                f"{hna_config.base_url}/hnapps/flight/queryFlightInfo"
-            )
-            flight_route.side_effect = [
-                httpx.ConnectError("connection reset"),
-                httpx.Response(200, json=flight_response),
+            route = respx.post(_search_url(hna_config))
+            route.side_effect = [
+                httpx.ConnectError("connection reset"),     # 1st attempt
+                httpx.Response(200, json=flight_response),  # retry succeeds
+                httpx.Response(200, json=member_response),  # member query
             ]
-            respx.post(
-                f"{hna_config.base_url}/hnapps/member/flight/memberFares"
-            ).mock(return_value=httpx.Response(200, json=member_response))
 
             client = FlightSearchClient(hna_config, mock_auth)
             import feifeile.flight
@@ -350,4 +343,4 @@ class TestFlightSearchClient:
 
         assert len(offers) == 1
         assert offers[0].price == 150.0
-        assert flight_route.call_count == 2
+        assert route.call_count == 3

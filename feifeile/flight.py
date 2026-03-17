@@ -14,18 +14,31 @@ from typing import Any
 import httpx
 from loguru import logger
 
-from feifeile.auth import AuthError, HNAAuth
+from feifeile.auth import (
+    AuthError,
+    HNAAuth,
+    _build_common_params,
+    _compute_sign,
+)
 from feifeile.config import HNAConfig
 
-# 航班查询接口路径（单程低价）
-_FLIGHT_SEARCH_PATH = "/hnapps/flight/queryFlightInfo"
-# 会员专属特价接口（会员登录后可见）
-_MEMBER_PRICE_PATH = "/hnapps/member/flight/memberFares"
+# 航班查询接口路径（低价搜索，含普通及会员价）
+_FLIGHT_SEARCH_PATH = "/ticket/lfs/airLowFareSearch"
+# 会员专属特价接口（同一端点，携带会员 Token 返回会员价）
+_MEMBER_PRICE_PATH = "/ticket/lfs/airLowFareSearch"
 
 # 遇到以下 HTTP 状态码时自动重试（网关/上游瞬态故障）
 _RETRYABLE_STATUS_CODES = {502, 503, 504}
 # 首次重试等待秒数，后续指数退避 (2s → 4s → 8s ...)
 _RETRY_BASE_DELAY = 2.0
+
+# 标准请求头（与 auth 模块一致）
+_DEFAULT_HEADERS: dict[str, str] = {
+    "Content-Type": "application/json",
+    "appver": "{app_version}",
+    "hna-app": "APP",
+    "hna-channel": "HTML5",
+}
 
 
 @dataclass
@@ -144,14 +157,12 @@ class FlightSearchClient:
     # ------------------------------------------------------------------
 
     def _build_headers(self, bearer: str) -> dict[str, str]:
-        return {
-            "Content-Type": "application/json;charset=UTF-8",
-            "Accept": "application/json",
-            "Authorization": bearer,
-            "User-Agent": f"HNA/{self._config.app_version} (Android; HNClient)",
-            "X-Channel": "Android",
-            "X-Client-Type": "app",
+        headers = {
+            k: v.format(app_version=self._config.app_version)
+            for k, v in _DEFAULT_HEADERS.items()
         }
+        headers["Authorization"] = bearer
+        return headers
 
     async def _query_flights(
         self,
@@ -160,21 +171,31 @@ class FlightSearchClient:
         date_str: str,
         headers: dict[str, str],
     ) -> list[dict[str, Any]]:
-        payload = {
+        data_params: dict[str, Any] = {
             "dptCity": origin,
             "arrCity": destination,
             "dptDate": date_str,
-            "tripType": "1",  # 1=单程
+            "tripType": "1",
             "adultCount": "1",
             "childCount": "0",
             "infantCount": "0",
         }
+        body = {
+            "common": _build_common_params(self._config),
+            "data": data_params,
+        }
         url = f"{self._config.base_url}{_FLIGHT_SEARCH_PATH}"
-        data = await self._post(url, payload, headers)
+        sign = _compute_sign(
+            headers, {}, data_params,
+            self._config.certificate_hash, self._config.hard_code,
+        )
+        result = await self._post(
+            url, body, headers, params={"hnairSign": sign},
+        )
         flights: list[dict[str, Any]] = (
-            data.get("flightList")
-            or data.get("flights")
-            or data.get("data")
+            result.get("flightList")
+            or result.get("flights")
+            or result.get("data")
             or []
         )
         return flights
@@ -186,17 +207,27 @@ class FlightSearchClient:
         date_str: str,
         headers: dict[str, str],
     ) -> list[dict[str, Any]]:
-        payload = {
+        data_params: dict[str, Any] = {
             "dptCity": origin,
             "arrCity": destination,
             "dptDate": date_str,
         }
+        body = {
+            "common": _build_common_params(self._config),
+            "data": data_params,
+        }
         url = f"{self._config.base_url}{_MEMBER_PRICE_PATH}"
-        data = await self._post(url, payload, headers)
+        sign = _compute_sign(
+            headers, {}, data_params,
+            self._config.certificate_hash, self._config.hard_code,
+        )
+        result = await self._post(
+            url, body, headers, params={"hnairSign": sign},
+        )
         fares: list[dict[str, Any]] = (
-            data.get("fareList")
-            or data.get("fares")
-            or data.get("data")
+            result.get("fareList")
+            or result.get("fares")
+            or result.get("data")
             or []
         )
         return fares
@@ -206,6 +237,8 @@ class FlightSearchClient:
         url: str,
         payload: dict[str, Any],
         headers: dict[str, str],
+        *,
+        params: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """发送 POST 请求并返回业务数据字典。
 
@@ -217,7 +250,9 @@ class FlightSearchClient:
         async with httpx.AsyncClient(timeout=self._config.timeout) as client:
             for attempt in range(max_retries + 1):
                 try:
-                    resp = await client.post(url, json=payload, headers=headers)
+                    resp = await client.post(
+                        url, json=payload, headers=headers, params=params,
+                    )
                     if resp.status_code == 401:
                         await self._auth.invalidate()
                         raise FlightSearchError("认证过期（401），请重新运行")
@@ -250,10 +285,10 @@ class FlightSearchClient:
                     break
 
         body: dict[str, Any] = resp.json()  # type: ignore[union-attr]
-        code = body.get("code") or body.get("resultCode") or body.get("status")
-        if str(code) not in ("0", "200", "success", "SUCCESS"):
+        if not body.get("success", False):
             raise FlightSearchError(
-                f"业务错误 code={code}: {body.get('msg') or body.get('message')}"
+                f"业务错误 {body.get('errorCode')}: "
+                f"{body.get('errorMessage')}"
             )
         return body.get("data") or body
 

@@ -23,18 +23,32 @@ class HNAConfig(BaseSettings):
     password: str = Field(..., description="海南航空账户密码")
 
     # 可选：如需特定 app 版本或设备指纹，在此覆盖
-    app_version: str = Field(default="7.8.0", description="模拟的 App 版本号")
+    app_version: str = Field(default="10.12.0", description="模拟的 App 版本号")
     device_id: str = Field(
         default="feifeile-monitor-001", description="模拟设备 ID"
     )
 
     # 基础 URL（如官方发布新域名可在此更新）
     base_url: str = Field(
-        default="https://appjis.hnair.com",
+        default="https://app.hnair.com",
         description="海南航空移动 API 基础 URL",
     )
     timeout: float = Field(default=60.0, description="HTTP 请求超时秒数")
     max_retries: int = Field(default=3, description="失败重试次数")
+
+    # HMAC-SHA1 请求签名相关
+    certificate_hash: str = Field(
+        default="6093941774D84495A5D15D8F909CAA1E",
+        description="签名附加参数（拼接到待签字符串末尾）",
+    )
+    hard_code: str = Field(
+        default="21047C596EAD45209346AE29F0350491",
+        description="HMAC-SHA1 签名密钥",
+    )
+    akey: str = Field(
+        default="9E4BBDDEC6C8416EA380E418161A7CD3",
+        description="应用身份标识",
+    )
 
 
 class WeComConfig(BaseSettings):
