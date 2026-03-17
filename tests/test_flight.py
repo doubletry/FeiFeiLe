@@ -263,3 +263,91 @@ class TestFlightSearchClient:
 
         assert len(offers) == 1
         assert offers[0].is_member_price
+
+    @pytest.mark.asyncio
+    async def test_retry_on_504_then_success(self, hna_config, mock_auth):
+        """504 网关超时应自动重试并最终返回结果。"""
+        flight_response = {
+            "code": "0",
+            "data": {
+                "flightList": [
+                    {
+                        "flightNo": "HU7822",
+                        "dptAirport": "HAK",
+                        "arrAirport": "PEK",
+                        "dptTime": "08:00",
+                        "arrTime": "12:00",
+                        "cabinClass": "Y",
+                        "price": "199",
+                        "seatCount": "5",
+                    },
+                ]
+            },
+        }
+        member_response = {"code": "0", "data": {"fareList": []}}
+
+        with respx.mock:
+            flight_route = respx.post(
+                f"{hna_config.base_url}/hnapps/flight/queryFlightInfo"
+            )
+            flight_route.side_effect = [
+                httpx.Response(504),
+                httpx.Response(200, json=flight_response),
+            ]
+            respx.post(
+                f"{hna_config.base_url}/hnapps/member/flight/memberFares"
+            ).mock(return_value=httpx.Response(200, json=member_response))
+
+            client = FlightSearchClient(hna_config, mock_auth)
+            import feifeile.flight
+            original_delay = feifeile.flight._RETRY_BASE_DELAY
+            feifeile.flight._RETRY_BASE_DELAY = 0.01
+            try:
+                offers = await client.search("HAK", "PEK", date(2025, 2, 1), threshold=199.0)
+            finally:
+                feifeile.flight._RETRY_BASE_DELAY = original_delay
+
+        assert len(offers) == 1
+        assert offers[0].flight_no == "HU7822"
+        assert flight_route.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_retry_network_error_then_success(self, hna_config, mock_auth):
+        """网络异常应自动重试。"""
+        flight_response = {
+            "code": "0",
+            "data": {
+                "flightList": [
+                    {
+                        "flightNo": "HU7830",
+                        "price": "150",
+                    },
+                ]
+            },
+        }
+        member_response = {"code": "0", "data": {"fareList": []}}
+
+        with respx.mock:
+            flight_route = respx.post(
+                f"{hna_config.base_url}/hnapps/flight/queryFlightInfo"
+            )
+            flight_route.side_effect = [
+                httpx.ConnectError("connection reset"),
+                httpx.Response(200, json=flight_response),
+            ]
+            respx.post(
+                f"{hna_config.base_url}/hnapps/member/flight/memberFares"
+            ).mock(return_value=httpx.Response(200, json=member_response))
+
+            client = FlightSearchClient(hna_config, mock_auth)
+            import feifeile.flight
+            original_delay = feifeile.flight._RETRY_BASE_DELAY
+            feifeile.flight._RETRY_BASE_DELAY = 0.01
+            try:
+                offers = await client.search("HAK", "PEK", date(2025, 2, 1), threshold=199.0)
+            finally:
+                feifeile.flight._RETRY_BASE_DELAY = original_delay
+
+        assert len(offers) == 1
+        assert offers[0].price == 150.0
+        assert flight_route.call_count == 2

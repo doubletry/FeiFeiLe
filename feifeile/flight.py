@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -20,6 +21,11 @@ from feifeile.config import HNAConfig
 _FLIGHT_SEARCH_PATH = "/hnapps/flight/queryFlightInfo"
 # 会员专属特价接口（会员登录后可见）
 _MEMBER_PRICE_PATH = "/hnapps/member/flight/memberFares"
+
+# 遇到以下 HTTP 状态码时自动重试（网关/上游瞬态故障）
+_RETRYABLE_STATUS_CODES = {502, 503, 504}
+# 首次重试等待秒数，后续指数退避 (2s → 4s → 8s ...)
+_RETRY_BASE_DELAY = 2.0
 
 
 @dataclass
@@ -201,21 +207,49 @@ class FlightSearchClient:
         payload: dict[str, Any],
         headers: dict[str, str],
     ) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=self._config.timeout) as client:
-            try:
-                resp = await client.post(url, json=payload, headers=headers)
-                if resp.status_code == 401:
-                    await self._auth.invalidate()
-                    raise FlightSearchError("认证过期（401），请重新运行")
-                resp.raise_for_status()
-            except httpx.HTTPStatusError as exc:
-                raise FlightSearchError(
-                    f"HTTP 错误 {exc.response.status_code}: {exc.response.text}"
-                ) from exc
-            except httpx.RequestError as exc:
-                raise FlightSearchError(f"网络错误: {exc}") from exc
+        """发送 POST 请求并返回业务数据字典。
 
-        body: dict[str, Any] = resp.json()
+        对 502/503/504 等网关瞬态错误自动重试（指数退避）。
+        """
+        max_retries = self._config.max_retries
+        resp = None
+
+        async with httpx.AsyncClient(timeout=self._config.timeout) as client:
+            for attempt in range(max_retries + 1):
+                try:
+                    resp = await client.post(url, json=payload, headers=headers)
+                    if resp.status_code == 401:
+                        await self._auth.invalidate()
+                        raise FlightSearchError("认证过期（401），请重新运行")
+                    if resp.status_code in _RETRYABLE_STATUS_CODES and attempt < max_retries:
+                        wait = _RETRY_BASE_DELAY * (2 ** attempt)
+                        logger.warning(
+                            "请求 {} 返回 {}，第 {}/{} 次重试（等待 {:.1f}s）",
+                            url, resp.status_code, attempt + 1, max_retries, wait,
+                        )
+                        await asyncio.sleep(wait)
+                        continue
+                    resp.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    raise FlightSearchError(
+                        f"HTTP 错误 {exc.response.status_code}: {exc.response.text}"
+                    ) from exc
+                except httpx.RequestError as exc:
+                    if attempt < max_retries:
+                        wait = _RETRY_BASE_DELAY * (2 ** attempt)
+                        logger.warning(
+                            "请求 {} 网络异常: {}，第 {}/{} 次重试（等待 {:.1f}s）",
+                            url, exc, attempt + 1, max_retries, wait,
+                        )
+                        await asyncio.sleep(wait)
+                        continue
+                    raise FlightSearchError(
+                        f"网络错误（已重试 {max_retries} 次）: {exc}"
+                    ) from exc
+                else:
+                    break
+
+        body: dict[str, Any] = resp.json()  # type: ignore[union-attr]
         code = body.get("code") or body.get("resultCode") or body.get("status")
         if str(code) not in ("0", "200", "success", "SUCCESS"):
             raise FlightSearchError(

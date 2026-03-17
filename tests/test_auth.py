@@ -101,8 +101,14 @@ class TestHNAAuth:
             ).mock(side_effect=httpx.ConnectError("connection failed"))
 
             auth = HNAAuth(hna_config)
-            with pytest.raises(AuthError, match="网络错误"):
-                await auth.get_token()
+            import feifeile.auth
+            original_delay = feifeile.auth._RETRY_BASE_DELAY
+            feifeile.auth._RETRY_BASE_DELAY = 0.01
+            try:
+                with pytest.raises(AuthError, match="网络错误"):
+                    await auth.get_token()
+            finally:
+                feifeile.auth._RETRY_BASE_DELAY = original_delay
 
     @pytest.mark.asyncio
     async def test_token_refresh_when_expired(self, hna_config):
@@ -163,3 +169,87 @@ class TestHNAAuth:
             assert auth._token is not None
             await auth.invalidate()
             assert auth._token is None
+
+    @pytest.mark.asyncio
+    async def test_retry_on_504_then_success(self, hna_config):
+        """504 网关超时应自动重试，最终成功。"""
+        login_response = {
+            "code": "0",
+            "data": {
+                "accessToken": "tok_retry",
+                "refreshToken": "ref_retry",
+                "expiresIn": 7200,
+                "memberId": "MBR_RETRY",
+            },
+        }
+        with respx.mock:
+            route = respx.post(
+                f"{hna_config.base_url}/hnapps/member/login/password"
+            )
+            route.side_effect = [
+                httpx.Response(504),
+                httpx.Response(200, json=login_response),
+            ]
+
+            auth = HNAAuth(hna_config)
+            # monkey-patch delay to speed up test
+            import feifeile.auth
+            original_delay = feifeile.auth._RETRY_BASE_DELAY
+            feifeile.auth._RETRY_BASE_DELAY = 0.01
+            try:
+                token = await auth.get_token()
+            finally:
+                feifeile.auth._RETRY_BASE_DELAY = original_delay
+
+        assert token.access_token == "tok_retry"
+        assert route.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_retry_exhausted_raises(self, hna_config):
+        """重试次数耗尽后应抛出错误。"""
+        with respx.mock:
+            respx.post(
+                f"{hna_config.base_url}/hnapps/member/login/password"
+            ).mock(return_value=httpx.Response(504))
+
+            auth = HNAAuth(hna_config)
+            import feifeile.auth
+            original_delay = feifeile.auth._RETRY_BASE_DELAY
+            feifeile.auth._RETRY_BASE_DELAY = 0.01
+            try:
+                with pytest.raises(AuthError, match="HTTP 错误"):
+                    await auth.get_token()
+            finally:
+                feifeile.auth._RETRY_BASE_DELAY = original_delay
+
+    @pytest.mark.asyncio
+    async def test_retry_on_network_error_then_success(self, hna_config):
+        """网络异常（如连接断开）应自动重试。"""
+        login_response = {
+            "code": "0",
+            "data": {
+                "accessToken": "tok_net",
+                "refreshToken": "ref_net",
+                "expiresIn": 7200,
+            },
+        }
+        with respx.mock:
+            route = respx.post(
+                f"{hna_config.base_url}/hnapps/member/login/password"
+            )
+            route.side_effect = [
+                httpx.ConnectError("connection reset"),
+                httpx.Response(200, json=login_response),
+            ]
+
+            auth = HNAAuth(hna_config)
+            import feifeile.auth
+            original_delay = feifeile.auth._RETRY_BASE_DELAY
+            feifeile.auth._RETRY_BASE_DELAY = 0.01
+            try:
+                token = await auth.get_token()
+            finally:
+                feifeile.auth._RETRY_BASE_DELAY = original_delay
+
+        assert token.access_token == "tok_net"
+        assert route.call_count == 2

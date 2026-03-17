@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import time
 from dataclasses import dataclass, field
@@ -25,6 +26,11 @@ _DEFAULT_HEADERS = {
     "X-Channel": "Android",
     "X-Client-Type": "app",
 }
+
+# 遇到以下 HTTP 状态码时自动重试（网关/上游瞬态故障）
+_RETRYABLE_STATUS_CODES = {502, 503, 504}
+# 首次重试等待秒数，后续指数退避 (2s → 4s → 8s ...)
+_RETRY_BASE_DELAY = 2.0
 
 # 登录接口路径
 _LOGIN_PATH = "/hnapps/member/login/password"
@@ -135,19 +141,43 @@ class HNAAuth:
         logger.debug("Token 刷新成功")
 
     async def _post(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
-        """发送 POST 请求并返回业务数据字典。"""
+        """发送 POST 请求并返回业务数据字典。
+
+        对 502/503/504 等网关瞬态错误自动重试（指数退避）。
+        """
+        max_retries = self._config.max_retries
+
         async with httpx.AsyncClient(timeout=self._config.timeout) as client:
-            try:
-                resp = await client.post(
-                    url, json=payload, headers=self._build_headers()
-                )
-                resp.raise_for_status()
-            except httpx.HTTPStatusError as exc:
-                raise AuthError(
-                    f"HTTP 错误 {exc.response.status_code}: {exc.response.text}"
-                ) from exc
-            except httpx.RequestError as exc:
-                raise AuthError(f"网络错误: {exc}") from exc
+            for attempt in range(max_retries + 1):
+                try:
+                    resp = await client.post(
+                        url, json=payload, headers=self._build_headers()
+                    )
+                    if resp.status_code in _RETRYABLE_STATUS_CODES and attempt < max_retries:
+                        wait = _RETRY_BASE_DELAY * (2 ** attempt)
+                        logger.warning(
+                            "请求 {} 返回 {}，第 {}/{} 次重试（等待 {:.1f}s）",
+                            url, resp.status_code, attempt + 1, max_retries, wait,
+                        )
+                        await asyncio.sleep(wait)
+                        continue
+                    resp.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    raise AuthError(
+                        f"HTTP 错误 {exc.response.status_code}: {exc.response.text}"
+                    ) from exc
+                except httpx.RequestError as exc:
+                    if attempt < max_retries:
+                        wait = _RETRY_BASE_DELAY * (2 ** attempt)
+                        logger.warning(
+                            "请求 {} 网络异常: {}，第 {}/{} 次重试（等待 {:.1f}s）",
+                            url, exc, attempt + 1, max_retries, wait,
+                        )
+                        await asyncio.sleep(wait)
+                        continue
+                    raise AuthError(f"网络错误（已重试 {max_retries} 次）: {exc}") from exc
+                else:
+                    break
 
         body: dict[str, Any] = resp.json()
         code = body.get("code") or body.get("resultCode") or body.get("status")

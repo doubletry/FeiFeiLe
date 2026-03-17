@@ -33,7 +33,7 @@ class HNAConfig(BaseSettings):
         default="https://appjis.hnair.com",
         description="海南航空移动 API 基础 URL",
     )
-    timeout: float = Field(default=30.0, description="HTTP 请求超时秒数")
+    timeout: float = Field(default=60.0, description="HTTP 请求超时秒数")
     max_retries: int = Field(default=3, description="失败重试次数")
 
 
