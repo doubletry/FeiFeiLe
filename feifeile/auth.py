@@ -56,8 +56,8 @@ _RETRY_BASE_DELAY = 2.0
 # ---------------------------------------------------------------------------
 # 接口路径
 # ---------------------------------------------------------------------------
-_LOGIN_PATH = "/mapp/webservice/v2/common/auth/login"
-_REFRESH_PATH = "/mapp/webservice/v2/common/auth/refresh"
+_LOGIN_PATH = "/appum/common/auth/v2/login"
+_REFRESH_PATH = "/appum/common/auth/v2/refresh"
 
 
 # ===================================================================
@@ -104,17 +104,17 @@ def _compute_sign(
     for k in sorted(k for k in headers if k.lower().startswith("hna")):
         values.append(str(headers[k]))
 
-    # 2. Body values for sorted keys (only primitives)
+    # 2. Query param values for sorted keys
+    for k in sorted(query_params.keys()):
+        values.append(str(query_params[k]))
+
+    # 3. Body values for sorted keys (only primitives)
     for k in sorted(body_params.keys()):
         v = body_params[k]
         if isinstance(v, bool):
             values.append("true" if v else "false")
         elif isinstance(v, (str, int, float)):
             values.append(str(v))
-
-    # 3. Query param values for sorted keys
-    for k in sorted(query_params.keys()):
-        values.append(str(query_params[k]))
 
     raw = "".join(values) + certificate_hash
     return hmac.new(

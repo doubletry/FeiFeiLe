@@ -12,8 +12,8 @@ from feifeile.auth import AuthError, AuthToken, HNAAuth
 from feifeile.config import HNAConfig
 
 # 新版 API 登录 / 刷新路径
-_LOGIN_URL_SUFFIX = "/mapp/webservice/v2/common/auth/login"
-_REFRESH_URL_SUFFIX = "/mapp/webservice/v2/common/auth/refresh"
+_LOGIN_URL_SUFFIX = "/appum/common/auth/v2/login"
+_REFRESH_URL_SUFFIX = "/appum/common/auth/v2/refresh"
 
 
 @pytest.fixture
