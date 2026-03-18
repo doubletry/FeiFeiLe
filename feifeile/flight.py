@@ -88,6 +88,14 @@ class FlightSearchError(Exception):
     """航班查询相关错误"""
 
 
+class NoFlightsError(FlightSearchError):
+    """当天无可用航班（业务正常，非系统错误）"""
+
+
+# 表示"当天无航班/无数据"的业务错误码，这类错误属于正常业务场景
+_NO_DATA_CODES = {"NO_DATA", "NO_FLIGHT", "EMPTY", "NO_SCHEDULE"}
+
+
 class FlightSearchClient:
     """航班查询客户端
 
@@ -137,8 +145,10 @@ class FlightSearchClient:
                 origin, destination, date_str, headers, token.access_token
             )
             offers.extend(self._parse_flights(raw_flights, origin, destination, date_str))
+        except NoFlightsError as exc:
+            logger.info("普通航班查询无结果（当天无航班）: {}", exc)
         except FlightSearchError as exc:
-            logger.info("普通航班查询无结果: {}", exc)
+            logger.warning("普通航班查询失败: {}", exc)
 
         # 2. 会员专属特价查询（叠加）
         try:
@@ -158,8 +168,10 @@ class FlightSearchClient:
                     ]
                 else:
                     offers.append(mo)
+        except NoFlightsError as exc:
+            logger.info("会员特价查询无结果（当天无航班）: {}", exc)
         except FlightSearchError as exc:
-            logger.info("会员特价查询无结果: {}", exc)
+            logger.warning("会员特价查询失败: {}", exc)
 
         qualified = [o for o in offers if o.price <= threshold]
         logger.info(
@@ -333,6 +345,9 @@ class FlightSearchClient:
         if not body.get("success", False):
             code = body.get("errorCode") or "UNKNOWN"
             msg = body.get("errorMessage") or "响应格式异常"
+            if code in _NO_DATA_CODES:
+                logger.debug("业务无数据 code={}, message={}", code, msg)
+                raise NoFlightsError(f"业务无数据 {code}: {msg}")
             logger.warning("业务错误 code={}, message={}, body={}", code, msg, body)
             raise FlightSearchError(f"业务错误 {code}: {msg}")
         return body.get("data") or body
