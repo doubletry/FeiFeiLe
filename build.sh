@@ -5,8 +5,8 @@ set -euo pipefail
 # 用法: bash build.sh
 # 产物: dist/feifeile
 #
-# 为保证 Debian 10+ 兼容性，请在 glibc <= 2.28 的环境中执行：
-#   docker run --rm -v "$PWD":/src -w /src debian:buster bash build.sh
+# 为保证 Debian 11+ 兼容性，请在 glibc <= 2.31 的环境中执行：
+#   docker run --rm -v "$PWD":/src -w /src debian:bullseye bash build.sh
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"

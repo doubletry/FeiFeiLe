@@ -12,7 +12,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     container:
-      image: debian:buster
+      image: debian:bullseye
 
     steps:
       - name: Install git (required for checkout)
@@ -33,26 +33,26 @@ jobs:
           name: feifeile-linux-amd64
           path: dist/feifeile-linux-amd64
 
-  test-debian10:
+  test-debian11:
     needs: build
     runs-on: ubuntu-latest
     container:
-      image: debian:buster-slim
+      image: debian:bullseye-slim
 
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: feifeile-linux-amd64
 
-      - name: Test on Debian 10
+      - name: Test on Debian 11
         run: |
           chmod +x feifeile-linux-amd64
           ./feifeile-linux-amd64 --help
           ./feifeile-linux-amd64 list
-          echo "Debian 10 compatibility test passed ✓"
+          echo "Debian 11 compatibility test passed ✓"
 
   release:
-    needs: test-debian10
+    needs: test-debian11
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
