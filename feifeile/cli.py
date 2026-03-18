@@ -143,3 +143,7 @@ def check(dry_run: bool) -> None:
     for sub_id, offers in results.items():
         for o in offers:
             click.echo(f"  [{sub_id}] {o}")
+
+
+if __name__ == "__main__":
+    main()

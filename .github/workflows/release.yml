@@ -1,0 +1,66 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: debian:buster
+
+    steps:
+      - name: Install git (required for checkout)
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq git ca-certificates
+
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: bash build.sh
+
+      - name: Rename artifact
+        run: mv dist/feifeile dist/feifeile-linux-amd64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: feifeile-linux-amd64
+          path: dist/feifeile-linux-amd64
+
+  test-debian10:
+    needs: build
+    runs-on: ubuntu-latest
+    container:
+      image: debian:buster-slim
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: feifeile-linux-amd64
+
+      - name: Test on Debian 10
+        run: |
+          chmod +x feifeile-linux-amd64
+          ./feifeile-linux-amd64 --help
+          ./feifeile-linux-amd64 list
+          echo "Debian 10 compatibility test passed ✓"
+
+  release:
+    needs: test-debian10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: feifeile-linux-amd64
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: feifeile-linux-amd64
