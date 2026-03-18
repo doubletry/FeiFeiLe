@@ -5,8 +5,8 @@ set -euo pipefail
 # 用法: bash build.sh
 # 产物: dist/feifeile
 #
-# 为保证 Debian 11+ 兼容性，请在 glibc <= 2.31 的环境中执行：
-#   docker run --rm -v "$PWD":/src -w /src debian:bullseye bash build.sh
+# 需要 Python 3.12+，推荐在官方 Python 镜像中执行：
+#   docker run --rm -v "$PWD":/src -w /src python:3.12-bullseye bash build.sh
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
@@ -16,19 +16,17 @@ if command -v apt-get &>/dev/null; then
     echo ">>> 安装系统构建依赖..."
     apt-get update -qq
     apt-get install -y -qq \
-        wget curl gcc g++ patchelf make ccache ca-certificates \
+        gcc g++ patchelf make ccache ca-certificates \
         zlib1g-dev libssl-dev libffi-dev libbz2-dev libreadline-dev \
         libsqlite3-dev liblzma-dev > /dev/null
 fi
 
-# ---------- 2. Python 3.12（通过 Miniconda 获取） ----------
-if ! python3 --version 2>/dev/null | grep -q "3\.12"; then
-    echo ">>> 安装 Miniconda 获取 Python 3.12..."
-    wget -q https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/miniconda.sh
-    bash /tmp/miniconda.sh -b -p /opt/miniconda
-    eval "$(/opt/miniconda/bin/conda shell.bash hook)"
-    conda create -y -q -n build python=3.12
-    conda activate build
+# ---------- 2. 检查 Python 3.12+ ----------
+echo ">>> 检查 Python 版本..."
+python3 --version
+if ! python3 --version 2>/dev/null | grep -qE "Python 3\.(1[2-9]|[2-9][0-9])\.[0-9]+"; then
+    echo "错误: 需要 Python 3.12+，请在 python:3.12-bullseye 容器中运行" >&2
+    exit 1
 fi
 
 # ---------- 3. Poetry ----------
