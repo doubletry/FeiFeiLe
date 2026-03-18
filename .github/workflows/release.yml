@@ -1,3 +1,9 @@
+# 发布工作流：创建 tag 时自动测试、构建并发布到 GitHub Releases
+#
+# 触发方式：推送 v* 格式的 tag，例如：
+#   git tag v1.0.0
+#   git push origin v1.0.0
+
 name: Build & Release
 
 on:
@@ -9,58 +15,105 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  # ──────────────────────────────────────────────
+  # 1. 运行测试（仅在测试通过后才构建）
+  # ──────────────────────────────────────────────
+  test:
     runs-on: ubuntu-latest
-    container:
-      image: python:3.12-bullseye
-
     steps:
-      - name: Install git (required for checkout)
-        run: |
-          apt-get update -qq
-          apt-get install -y -qq git ca-certificates
-
       - uses: actions/checkout@v4
 
-      - name: Build
-        run: bash build.sh
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
-      - name: Rename artifact
-        run: mv dist/feifeile dist/feifeile-linux-amd64
+      - name: Install Poetry
+        run: pipx install poetry
 
-      - uses: actions/upload-artifact@v4
+      - name: Install dependencies
+        run: poetry install
+
+      - name: Run tests
+        run: poetry run pytest tests/ -v
+
+  # ──────────────────────────────────────────────
+  # 2. 构建可执行文件（在 manylinux 容器中构建，确保兼容 Debian 10+ / GLIBC 2.28+）
+  # ──────────────────────────────────────────────
+  build:
+    needs: test
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build with Nuitka (Linux)
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/workspace" -w /workspace \
+            quay.io/pypa/manylinux_2_28_x86_64 \
+            bash -c '
+              set -e
+              export PATH="/opt/python/cp312-cp312/bin:$PATH"
+              cd /opt/_internal && tar xf static-libs-for-embedding-only.tar.xz && cd /workspace
+              pip install poetry
+              poetry install --no-interaction --only main
+              poetry run pip install nuitka ordered-set zstandard
+              pip install patchelf
+              chmod +x build.sh
+              bash build.sh feifeile-linux-amd64
+              chmod +x dist/feifeile-linux-amd64
+            '
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
         with:
           name: feifeile-linux-amd64
           path: dist/feifeile-linux-amd64
 
-  test-debian11:
+  # ──────────────────────────────────────────────
+  # 3. 创建 GitHub Release 并上传构建产物
+  # ──────────────────────────────────────────────
+  release:
     needs: build
     runs-on: ubuntu-latest
-    container:
-      image: debian:bullseye-slim
 
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: feifeile-linux-amd64
+      - uses: actions/checkout@v4
 
-      - name: Test on Debian 11
-        run: |
-          chmod +x feifeile-linux-amd64
-          ./feifeile-linux-amd64 --help
-          ./feifeile-linux-amd64 list
-          echo "Debian 11 compatibility test passed ✓"
-
-  release:
-    needs: test-debian11
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
         with:
-          name: feifeile-linux-amd64
+          path: artifacts/
+
+      - name: List artifacts
+        run: find artifacts/ -type f
+
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          name: "v${{ steps.version.outputs.VERSION }}"
+          tag_name: ${{ github.ref_name }}
           generate_release_notes: true
-          files: feifeile-linux-amd64
+          files: |
+            artifacts/feifeile-linux-amd64/feifeile-linux-amd64
+          body: |
+            ## 飞飞乐 v${{ steps.version.outputs.VERSION }}
+
+            ### 下载
+            | 平台 | 文件 |
+            |------|------|
+            | Linux (x64) | `feifeile-linux-amd64` |
+
+            ### 使用方式
+            1. 下载可执行文件
+            2. 在同目录创建 `.env` 配置文件（参考 `.env.example`）
+            3. 运行可执行文件
+
+            ```bash
+            chmod +x feifeile-linux-amd64
+            ./feifeile-linux-amd64 --help
+            ```
