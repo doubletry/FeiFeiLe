@@ -16,6 +16,7 @@ from feifeile.flight import (
     FlightOffer,
     FlightSearchClient,
     FlightSearchError,
+    NoFlightsError,
     _extract_price,
     _extract_price_from_itinerary,
     _extract_base_price_from_itinerary,
@@ -666,3 +667,31 @@ class TestFlightSearchClient:
             offers = await client.search("HAK", "PEK", date(2025, 2, 1), threshold=199.0)
 
         assert offers == []
+
+    @pytest.mark.asyncio
+    async def test_search_unknown_business_error_graceful(self, hna_config, mock_auth):
+        """未知业务错误码（非 NO_DATA）应优雅处理并返回空列表，而非 NoFlightsError。"""
+        unknown_error_response = {
+            "success": False,
+            "errorCode": "SYSTEM_ERROR",
+            "errorMessage": "系统内部错误",
+        }
+
+        with respx.mock:
+            route = respx.post(_search_url(hna_config))
+            route.side_effect = [
+                httpx.Response(200, json=unknown_error_response),
+                httpx.Response(200, json=unknown_error_response),
+            ]
+
+            client = FlightSearchClient(hna_config, mock_auth)
+            offers = await client.search("HAK", "PEK", date(2025, 2, 1), threshold=199.0)
+
+        assert offers == []
+
+
+class TestNoFlightsError:
+    def test_is_subclass_of_flight_search_error(self):
+        err = NoFlightsError("当天无航班")
+        assert isinstance(err, FlightSearchError)
+        assert isinstance(err, NoFlightsError)
