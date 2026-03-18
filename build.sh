@@ -51,7 +51,6 @@ mkdir -p dist
 echo ">>> 开始 Nuitka 打包..."
 poetry run python -m nuitka \
     --onefile \
-    --static-libpython=yes \
     --output-dir=dist \
     --output-filename=feifeile \
     --include-package=feifeile \
