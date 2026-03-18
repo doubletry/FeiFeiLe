@@ -87,20 +87,10 @@ class MonitorConfig(BaseSettings):
     price_threshold: float = Field(
         default=199.0, description="触发通知的价格阈值（元）"
     )
-    interval_hours: float = Field(
-        default=4.0, description="两次查询之间的间隔（小时）"
-    )
     # 订阅列表存储路径（JSON 文件），默认放在当前目录
     subscriptions_file: str = Field(
         default="subscriptions.json", description="订阅信息持久化文件路径"
     )
-
-    @field_validator("interval_hours")
-    @classmethod
-    def interval_must_be_positive(cls, v: float) -> float:
-        if v <= 0:
-            raise ValueError("interval_hours 必须大于 0")
-        return v
 
     @field_validator("price_threshold")
     @classmethod

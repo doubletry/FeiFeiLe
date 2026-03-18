@@ -48,13 +48,7 @@ class TestMonitorConfig:
     def test_defaults(self, monkeypatch):
         cfg = MonitorConfig()
         assert cfg.price_threshold == 199.0
-        assert cfg.interval_hours == 4.0
         assert cfg.subscriptions_file == "subscriptions.json"
-
-    def test_invalid_interval(self, monkeypatch):
-        monkeypatch.setenv("MONITOR_INTERVAL_HOURS", "-1")
-        with pytest.raises(Exception):
-            MonitorConfig()
 
     def test_invalid_threshold(self, monkeypatch):
         monkeypatch.setenv("MONITOR_PRICE_THRESHOLD", "0")

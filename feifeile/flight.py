@@ -99,17 +99,25 @@ _NO_DATA_CODES = {"NO_DATA", "NO_FLIGHT", "EMPTY", "NO_SCHEDULE"}
 class FlightSearchClient:
     """航班查询客户端
 
-    Example::
+    支持作为 async context manager 使用，复用 HTTP 连接::
 
-        config = HNAConfig(username="...", password="...")
-        auth = HNAAuth(config)
-        client = FlightSearchClient(config, auth)
-        offers = await client.search("HAK", "PEK", date(2025, 2, 1), threshold=199)
+        async with FlightSearchClient(config, auth) as client:
+            offers = await client.search("HAK", "PEK", date(2025, 2, 1))
     """
 
     def __init__(self, config: HNAConfig, auth: HNAAuth) -> None:
         self._config = config
         self._auth = auth
+        self._client: httpx.AsyncClient | None = None
+
+    async def __aenter__(self) -> "FlightSearchClient":
+        self._client = httpx.AsyncClient(timeout=self._config.timeout)
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        if self._client:
+            await self._client.aclose()
+            self._client = None
 
     # ------------------------------------------------------------------
     # 公共接口
@@ -289,7 +297,10 @@ class FlightSearchClient:
         max_retries = self._config.max_retries
         resp = None
 
-        async with httpx.AsyncClient(timeout=self._config.timeout) as client:
+        # 复用共享 client（async with 模式）或创建临时 client
+        shared = self._client is not None and not self._client.is_closed
+        client = self._client if shared else httpx.AsyncClient(timeout=self._config.timeout)
+        try:
             for attempt in range(max_retries + 1):
                 try:
                     resp = await client.post(
@@ -339,6 +350,9 @@ class FlightSearchClient:
                     ) from exc
                 else:
                     break
+        finally:
+            if not shared:
+                await client.aclose()
 
         body: dict[str, Any] = resp.json()  # type: ignore[union-attr]
         logger.debug("API 响应 success={}, keys={}", body.get("success"), list(body.keys()))

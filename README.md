@@ -1,8 +1,10 @@
 # FeiFeiLe — 飞飞乐
 
 海南航空（HNA）航班特价监控工具。作为海南航空会员，您可以享受 ¥199 等特价机票，
-但放票时间不固定。本工具每隔 4 小时自动登录您的账号查询指定航线，
+但放票时间不固定。本工具登录您的账号查询指定航线，
 一旦发现符合价格条件的航班，立即通过**企业微信应用消息**推送通知。
+
+每次执行完成一轮查询后自动退出，适合配合外部定时器（cron / Windows 任务计划）使用。
 
 > ⚠️ 本项目仅供个人学习与合理使用，查询频率远低于人工操作，不会对航空公司造成损害。
 > 请遵守海南航空用户协议及相关法律法规。
@@ -11,10 +13,11 @@
 
 - ✅ 模拟海南航空移动端 App 登录，支持 Token 自动刷新
 - ✅ 查询普通票价与会员专属特价（¥199 起）
-- ✅ 每 4 小时自动轮询（可配置）
-- ✅ 企业微信应用消息推送（textcard 卡片格式）
 - ✅ 多订阅管理（不同日期、不同航线）
+- ✅ 单次登录查询所有订阅（复用 HTTP 连接与 Token）
+- ✅ 企业微信应用消息推送（textcard 卡片格式）
 - ✅ 过期订阅自动清理
+- ✅ 无内置定时，适配外部调度器（cron 等）
 
 ## 快速开始
 
@@ -62,23 +65,30 @@ poetry run feifeile add -o HAK -d PEK -D 2025-03-15 --threshold 299
 poetry run feifeile list
 ```
 
-### 6. 启动监控
+### 6. 执行一次查询
 
 ```bash
-# 启动后立即执行一次查询，之后每 4 小时重复（推荐）
-poetry run feifeile run
+# 查询所有订阅并发送通知
+poetry run feifeile check
 
-# 仅等待定时触发，不立即查询
-poetry run feifeile run --no-immediate
-
-# 自定义间隔（例如每 2 小时）
-poetry run feifeile run --interval 2
+# Dry-run 模式：仅输出结果，不发送微信消息
+poetry run feifeile check --dry-run
 ```
 
-### 7. 立即手动检查一次
+### 7. 配合外部定时器
 
+程序每次执行完一轮查询后自动退出，需配合外部定时器实现定期监控。
+
+**Linux / macOS (cron)**：
 ```bash
-poetry run feifeile check
+# 每 4 小时执行一次（编辑 crontab: crontab -e）
+0 */4 * * * cd /path/to/FeiFeiLe && poetry run feifeile check
+```
+
+**Windows 任务计划**：
+```powershell
+# 创建每 4 小时执行一次的计划任务
+schtasks /create /tn "FeiFeiLe" /tr "poetry run feifeile check" /sc hourly /mo 4 /sd (Get-Date -Format yyyy/MM/dd)
 ```
 
 ### 8. 删除订阅
@@ -97,15 +107,13 @@ feifeile/
 ├── config.py      # pydantic-settings 配置模型
 ├── flight.py      # 航班查询与解析
 ├── monitor.py     # 监控执行器 + 订阅持久化
-├── notifier.py    # 企业微信应用消息通知（textcard）
-└── scheduler.py   # APScheduler 定时调度
+└── notifier.py    # 企业微信应用消息通知（textcard）
 tests/
 ├── test_auth.py
 ├── test_config.py
 ├── test_flight.py
 ├── test_monitor.py
-├── test_notifier.py
-└── test_scheduler.py
+└── test_notifier.py
 ```
 
 ## 运行测试
@@ -136,6 +144,6 @@ poetry run pytest --cov=feifeile --cov-report=term-missing
 ## 注意事项
 
 1. **登录安全**：密码存储在本地 `.env` 文件中，请确保文件权限设置正确（`chmod 600 .env`）。
-2. **Token 缓存**：程序运行期间 Token 保存在内存中，重启后重新登录。
-3. **API 变动**：海南航空 App API 可能随版本更新变化，如遇查询失败请检查 `HNA_BASE_URL` 和 `HNA_APP_VERSION` 配置。
-4. **频率限制**：默认 4 小时间隔已相当保守，请勿设置过短的间隔。
+2. **Token 缓存**：程序运行期间 Token 保存在内存中，每次执行会重新登录。
+3. **连接复用**：同一次执行中，所有订阅共享同一个 HTTP 连接和 Token，不会重复登录。
+4. **API 变动**：海南航空 App API 可能随版本更新变化，如遇查询失败请检查 `HNA_BASE_URL` 和 `HNA_APP_VERSION` 配置。

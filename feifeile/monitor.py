@@ -150,30 +150,34 @@ class Monitor:
             logger.info("当前没有活跃的订阅")
             return {}
 
+        # 预先登录一次，后续所有订阅复用同一 Token
+        await self._auth.get_token()
+
         results: dict[str, list[FlightOffer]] = {}
-        for sub in active:
-            logger.info("检查订阅 [{}] {}->{} {}", sub.id, sub.origin, sub.destination, sub.depart_date)
-            try:
-                offers = await self._search.search(
-                    origin=sub.origin,
-                    destination=sub.destination,
-                    depart_date=sub.depart_date_obj,
-                    threshold=sub.price_threshold,
-                )
-                results[sub.id] = offers
-                if offers:
-                    if self._dry_run:
-                        logger.info(
-                            "[dry-run] 订阅 [{}] 找到 {} 个符合条件的航班（跳过发送）",
-                            sub.id,
-                            len(offers),
-                        )
-                        for o in offers:
-                            logger.info("[dry-run]   {}", o)
-                    elif self._notifier is not None:
-                        await self._notifier.send_flight_alerts(offers, sub.price_threshold)
-            except Exception as exc:
-                logger.error("订阅 [{}] 查询失败: {}", sub.id, exc)
-                results[sub.id] = []
+        async with self._search:
+            for sub in active:
+                logger.info("检查订阅 [{}] {}->{} {}", sub.id, sub.origin, sub.destination, sub.depart_date)
+                try:
+                    offers = await self._search.search(
+                        origin=sub.origin,
+                        destination=sub.destination,
+                        depart_date=sub.depart_date_obj,
+                        threshold=sub.price_threshold,
+                    )
+                    results[sub.id] = offers
+                    if offers:
+                        if self._dry_run:
+                            logger.info(
+                                "[dry-run] 订阅 [{}] 找到 {} 个符合条件的航班（跳过发送）",
+                                sub.id,
+                                len(offers),
+                            )
+                            for o in offers:
+                                logger.info("[dry-run]   {}", o)
+                        elif self._notifier is not None:
+                            await self._notifier.send_flight_alerts(offers, sub.price_threshold)
+                except Exception as exc:
+                    logger.error("订阅 [{}] 查询失败: {}", sub.id, exc)
+                    results[sub.id] = []
 
         return results

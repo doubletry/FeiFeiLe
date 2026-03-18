@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import date, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from feifeile.auth import AuthToken
 from feifeile.config import HNAConfig, MonitorConfig, WeComConfig
 from feifeile.flight import FlightOffer
 from feifeile.monitor import Monitor, Subscription, SubscriptionStore
@@ -138,7 +140,16 @@ def configs(monkeypatch):
 def monitor_with_store(configs, tmp_path):
     hna, wecom, mon = configs
     store = SubscriptionStore(str(tmp_path / "subs.json"))
-    return Monitor(hna, wecom, mon, store), store
+    monitor = Monitor(hna, wecom, mon, store)
+    # Mock auth to prevent real login during tests
+    monitor._auth.get_token = AsyncMock(
+        return_value=AuthToken(
+            access_token="test_token",
+            refresh_token="test_ref",
+            expires_at=time.time() + 7200,
+        )
+    )
+    return monitor, store
 
 
 class TestMonitor:
@@ -225,6 +236,13 @@ class TestMonitor:
         hna, wecom, mon = configs
         store = SubscriptionStore(str(tmp_path / "dry_subs.json"))
         monitor = Monitor(hna, wecom, mon, store, dry_run=True)
+        monitor._auth.get_token = AsyncMock(
+            return_value=AuthToken(
+                access_token="test_token",
+                refresh_token="test_ref",
+                expires_at=time.time() + 7200,
+            )
+        )
         store.add(make_sub())
 
         matching_offer = FlightOffer(
@@ -260,6 +278,13 @@ class TestMonitor:
         store = SubscriptionStore(str(tmp_path / "dry_subs2.json"))
         # wecom_config=None
         monitor = Monitor(hna, None, mon, store, dry_run=True)
+        monitor._auth.get_token = AsyncMock(
+            return_value=AuthToken(
+                access_token="test_token",
+                refresh_token="test_ref",
+                expires_at=time.time() + 7200,
+            )
+        )
         store.add(make_sub())
 
         matching_offer = FlightOffer(
@@ -279,3 +304,18 @@ class TestMonitor:
 
         assert len(results) == 1
         assert monitor._notifier is None
+
+    @pytest.mark.asyncio
+    async def test_run_once_login_called_once_for_multiple_subs(self, monitor_with_store):
+        """多个订阅只应登录一次（get_token 在循环外调用一次）。"""
+        monitor, store = monitor_with_store
+        store.add(make_sub(sub_id="sub1", origin="HAK", destination="PEK"))
+        store.add(make_sub(sub_id="sub2", origin="SZX", destination="TNA"))
+        store.add(make_sub(sub_id="sub3", origin="PEK", destination="HAK"))
+
+        with patch.object(monitor._search, "search", new=AsyncMock(return_value=[])):
+            results = await monitor.run_once()
+
+        assert len(results) == 3
+        # get_token 仅在循环前调用一次
+        assert monitor._auth.get_token.await_count == 1
