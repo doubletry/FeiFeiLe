@@ -39,7 +39,7 @@ def build_scheduler(monitor: Monitor, interval_hours: float) -> BlockingSchedule
         id="flight_monitor",
         name="海南航空航班价格监控",
         max_instances=1,
-        coalesce=True,  # 若上一次未完成则跳过
+        coalesce=True,  # 合并错过的触发为一次执行（max_instances=1 防止重叠）
     )
     return scheduler
 

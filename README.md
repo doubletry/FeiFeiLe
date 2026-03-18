@@ -2,7 +2,7 @@
 
 海南航空（HNA）航班特价监控工具。作为海南航空会员，您可以享受 ¥199 等特价机票，
 但放票时间不固定。本工具每隔 4 小时自动登录您的账号查询指定航线，
-一旦发现符合价格条件的航班，立即通过**企业微信**群机器人推送通知。
+一旦发现符合价格条件的航班，立即通过**企业微信应用消息**推送通知。
 
 > ⚠️ 本项目仅供个人学习与合理使用，查询频率远低于人工操作，不会对航空公司造成损害。
 > 请遵守海南航空用户协议及相关法律法规。
@@ -12,7 +12,7 @@
 - ✅ 模拟海南航空移动端 App 登录，支持 Token 自动刷新
 - ✅ 查询普通票价与会员专属特价（¥199 起）
 - ✅ 每 4 小时自动轮询（可配置）
-- ✅ 企业微信群机器人 Markdown 消息推送
+- ✅ 企业微信应用消息推送（textcard 卡片格式）
 - ✅ 多订阅管理（不同日期、不同航线）
 - ✅ 过期订阅自动清理
 
@@ -37,13 +37,14 @@ poetry install
 
 ```bash
 cp .env.example .env
-# 编辑 .env，填写 HNA_USERNAME、HNA_PASSWORD、WECOM_WEBHOOK_URL
+# 编辑 .env，填写 HNA_USERNAME、HNA_PASSWORD、WECOM_CORP_ID、WECOM_SECRET、WECOM_AGENT_ID
 ```
 
-获取企业微信 Webhook URL 的方法：
-1. 打开企业微信，进入目标群聊
-2. 点击右上角「...」→「添加群机器人」
-3. 添加后复制 Webhook URL
+获取企业微信应用配置的方法：
+1. 登录[企业微信管理后台](https://work.weixin.qq.com/)
+2. 进入「应用管理」→「自建」→「创建应用」
+3. 记录 **AgentId**（即 `WECOM_AGENT_ID`）和 **Secret**（即 `WECOM_SECRET`）
+4. 在「我的企业」页面获取 **企业 ID**（即 `WECOM_CORP_ID`）
 
 ### 4. 添加订阅
 
@@ -96,7 +97,7 @@ feifeile/
 ├── config.py      # pydantic-settings 配置模型
 ├── flight.py      # 航班查询与解析
 ├── monitor.py     # 监控执行器 + 订阅持久化
-├── notifier.py    # 企业微信群机器人通知
+├── notifier.py    # 企业微信应用消息通知（textcard）
 └── scheduler.py   # APScheduler 定时调度
 tests/
 ├── test_auth.py
