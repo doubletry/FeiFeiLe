@@ -1,0 +1,41 @@
+[project]
+name = "feifeile"
+version = "0.1.0"
+description = "海南航空航班价格监控工具"
+authors = [
+    {name = "FeiFeiLe"}
+]
+readme = "README.md"
+requires-python = "^3.12"
+dependencies = [
+    "httpx>=0.27.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.3.0",
+    "apscheduler>=3.10.4",
+    "python-dotenv>=1.0.1",
+    "loguru>=0.7.2",
+    "click>=8.1.7",
+]
+
+[project.scripts]
+feifeile = "feifeile.cli:main"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=8.2.0"
+pytest-asyncio = ">=0.23.7"
+pytest-mock = ">=3.14.0"
+respx = ">=0.21.1"
+coverage = ">=7.5.0"
+pytest-cov = ">=5.0.0"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["feifeile"]
+omit = ["tests/*"]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
