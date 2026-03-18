@@ -628,3 +628,41 @@ class TestFlightSearchClient:
         assert offers[0].flight_no == "HU7822"
         # 3 calls: 521 retry + flight query success + member query
         assert route.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_search_no_flights_business_error_returns_empty(self, hna_config, mock_auth):
+        """API 返回业务错误（当天无航班）时应正常返回空列表，不抛出异常。"""
+        no_flight_response = {
+            "success": False,
+            "errorCode": "NO_DATA",
+            "errorMessage": "没有可用航班",
+        }
+
+        with respx.mock:
+            route = respx.post(_search_url(hna_config))
+            route.side_effect = [
+                httpx.Response(200, json=no_flight_response),  # 普通查询：无航班
+                httpx.Response(200, json=no_flight_response),  # 会员查询：无航班
+            ]
+
+            client = FlightSearchClient(hna_config, mock_auth)
+            offers = await client.search("HAK", "PEK", date(2025, 2, 1), threshold=199.0)
+
+        assert offers == []
+
+    @pytest.mark.asyncio
+    async def test_search_no_flights_empty_itineraries_returns_empty(self, hna_config, mock_auth):
+        """API 返回成功但航班列表为空时应正常返回空列表。"""
+        empty_response = _wrap_response([])  # success=True, 但无航班
+
+        with respx.mock:
+            route = respx.post(_search_url(hna_config))
+            route.side_effect = [
+                httpx.Response(200, json=empty_response),
+                httpx.Response(200, json=empty_response),
+            ]
+
+            client = FlightSearchClient(hna_config, mock_auth)
+            offers = await client.search("HAK", "PEK", date(2025, 2, 1), threshold=199.0)
+
+        assert offers == []

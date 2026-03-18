@@ -138,7 +138,7 @@ class FlightSearchClient:
             )
             offers.extend(self._parse_flights(raw_flights, origin, destination, date_str))
         except FlightSearchError as exc:
-            logger.exception("普通航班查询失败: {}", exc)
+            logger.info("普通航班查询无结果: {}", exc)
 
         # 2. 会员专属特价查询（叠加）
         try:
@@ -159,7 +159,7 @@ class FlightSearchClient:
                 else:
                     offers.append(mo)
         except FlightSearchError as exc:
-            logger.exception("会员特价查询失败: {}", exc)
+            logger.info("会员特价查询无结果: {}", exc)
 
         qualified = [o for o in offers if o.price <= threshold]
         logger.info(
