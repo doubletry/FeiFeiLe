@@ -52,19 +52,6 @@ poetry run python -m nuitka \
     --output-dir=dist \
     --output-filename=feifeile \
     --include-package=feifeile \
-    --include-package=pydantic \
-    --include-package=pydantic_settings \
-    --include-package=httpx \
-    --include-package=click \
-    --include-package=loguru \
-    --include-package=dotenv \
-    --include-package=certifi \
-    --include-package=httpcore \
-    --include-package=anyio \
-    --include-package=sniffio \
-    --include-package=idna \
-    --include-package=h11 \
-    --enable-plugin=no-qt \
     --assume-yes-for-downloads \
     --remove-output \
     feifeile/cli.py
