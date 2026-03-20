@@ -12,11 +12,12 @@ import json
 import os
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
-from feifeile.auth import HNAAuth
+from feifeile.auth import CaptchaRequiredError, HNAAuth
 from feifeile.config import HNAConfig, MonitorConfig, WeComConfig
 from feifeile.flight import FlightOffer, FlightSearchClient
 from feifeile.notifier import WeComNotifier
@@ -130,12 +131,16 @@ class Monitor:
         store: SubscriptionStore,
         *,
         dry_run: bool = False,
+        token_file: str | Path | None = None,
     ) -> None:
         self._hna_config = hna_config
         self._monitor_config = monitor_config
         self._store = store
         self._dry_run = dry_run
-        self._auth = HNAAuth(hna_config)
+        kwargs = {}
+        if token_file is not None:
+            kwargs["token_file"] = token_file
+        self._auth = HNAAuth(hna_config, **kwargs)
         self._search = FlightSearchClient(hna_config, self._auth)
         self._notifier = WeComNotifier(wecom_config) if wecom_config and not dry_run else None
 
@@ -151,7 +156,12 @@ class Monitor:
             return {}
 
         # 预先登录一次，后续所有订阅复用同一 Token
-        await self._auth.get_token()
+        try:
+            await self._auth.get_token()
+        except CaptchaRequiredError:
+            logger.warning("海航登录触发 CAPTCHA 验证（E000167），本次查询跳过")
+            await self._notify_captcha_required()
+            return {}
 
         results: dict[str, list[FlightOffer]] = {}
         async with self._search:
@@ -177,7 +187,29 @@ class Monitor:
                         elif self._notifier is not None:
                             await self._notifier.send_flight_alerts(offers, sub.price_threshold)
                 except Exception as exc:
-                    logger.error("订阅 [{}] 查询失败: {}", sub.id, exc)
+                    logger.exception("订阅 [{}] 查询失败: {}", sub.id, exc)
                     results[sub.id] = []
 
         return results
+
+    async def _notify_captcha_required(self) -> None:
+        """通过企业微信通知用户需要完成 CAPTCHA 验证。"""
+        msg = (
+            "⚠️ 海航登录触发 CAPTCHA 验证（E000167）\n"
+            "请按以下步骤导入 Token：\n"
+            "1. 在手机/电脑浏览器打开 https://m.hnair.com 并登录\n"
+            "2. F12 开发者工具 → Network → 找到 login 请求\n"
+            "3. 复制该请求的完整 Response 内容\n"
+            "4. 在服务器执行：\n"
+            'feifeile token import \'{"success":true,...}\''
+        )
+        if self._notifier is not None:
+            try:
+                await self._notifier.send_text(msg)
+                logger.info("已通过企业微信发送 CAPTCHA 验证通知")
+            except Exception as exc:
+                logger.warning("发送 CAPTCHA 验证通知失败: {}", exc)
+        else:
+            logger.warning(
+                "未配置企业微信，无法发送 CAPTCHA 通知。\n{}", msg
+            )
