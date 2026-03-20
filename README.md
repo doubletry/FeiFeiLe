@@ -43,6 +43,14 @@ cp .env.example .env
 # 编辑 .env，填写 HNA_USERNAME、HNA_PASSWORD、WECOM_CORP_ID、WECOM_SECRET、WECOM_AGENT_ID
 ```
 
+您也可以通过 `--env` 参数指定自定义的 `.env` 文件路径：
+
+```bash
+# 使用自定义路径的 .env 文件
+poetry run feifeile --env /path/to/my.env list
+poetry run feifeile --env /path/to/my.env check --dry-run
+```
+
 获取企业微信应用配置的方法：
 1. 登录[企业微信管理后台](https://work.weixin.qq.com/)
 2. 进入「应用管理」→「自建」→「创建应用」

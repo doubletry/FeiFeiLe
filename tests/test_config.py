@@ -31,6 +31,16 @@ class TestHNAConfig:
         with pytest.raises(Exception):
             HNAConfig()
 
+    def test_load_from_custom_env_file(self, tmp_path, monkeypatch):
+        """通过 _env_file 构造参数从自定义文件加载。"""
+        env_file = tmp_path / "custom.env"
+        env_file.write_text("HNA_USERNAME=file_user\nHNA_PASSWORD=file_pass\n")
+        monkeypatch.delenv("HNA_USERNAME", raising=False)
+        monkeypatch.delenv("HNA_PASSWORD", raising=False)
+        cfg = HNAConfig(_env_file=str(env_file))
+        assert cfg.username == "file_user"
+        assert cfg.password == "file_pass"
+
 
 class TestWeComConfig:
     def test_defaults(self, monkeypatch):

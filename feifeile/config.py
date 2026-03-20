@@ -1,6 +1,8 @@
 """配置管理模块
 
 通过环境变量或 .env 文件加载所有运行时配置。
+支持通过 ``--env`` CLI 参数指定自定义 .env 文件路径（传递 pydantic-settings
+的 ``_env_file`` 构造参数来覆盖默认值）。
 """
 
 from __future__ import annotations
