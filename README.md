@@ -65,10 +65,13 @@ poetry run feifeile -d /path/to/data check --dry-run
 
 ```bash
 # 订阅 2025-02-01 海口→北京 (HAK→PEK)，¥199 以下通知
-poetry run feifeile add --origin HAK --destination PEK --date 2025-02-01
+poetry run feifeile add --from HAK --to PEK --date 2025-02-01
 
 # 指定自定义价格阈值（例如 299 元）
-poetry run feifeile add -o HAK -D PEK --date 2025-03-15 --threshold 299
+poetry run feifeile add -f HAK -t PEK --date 2025-03-15 --price 299
+
+# 将订阅信息添加到指定数据目录
+poetry run feifeile add -d /path/to/data -f HAK -t PEK --date 2025-04-01
 ```
 
 ### 5. 查看订阅
