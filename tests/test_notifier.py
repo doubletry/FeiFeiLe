@@ -188,6 +188,7 @@ class TestWeComNotifier:
         assert "HU7822" in desc
         assert "HAK" in desc
         assert "PEK" in desc
+        assert "2025-02-01" in desc  # 验证日期显示
         assert "199" in card["title"]
         assert "2" in desc  # 2 个航班
         # 验证机票和税费分别列出

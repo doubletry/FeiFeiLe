@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from feifeile.auth import AuthToken
+from feifeile.auth import AuthToken, CaptchaRequiredError
 from feifeile.config import HNAConfig, MonitorConfig, WeComConfig
 from feifeile.flight import FlightOffer
 from feifeile.monitor import Monitor, Subscription, SubscriptionStore
@@ -319,3 +319,45 @@ class TestMonitor:
         assert len(results) == 3
         # get_token 仅在循环前调用一次
         assert monitor._auth.get_token.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_captcha_triggers_wecom_notification(self, configs, tmp_path):
+        """E000167 应通过企业微信发送通知并优雅退出。"""
+        hna, wecom, mon = configs
+        store = SubscriptionStore(str(tmp_path / "captcha_subs.json"))
+        store.add(make_sub())
+        monitor = Monitor(hna, wecom, mon, store)
+        # login 抛出 CaptchaRequiredError
+        monitor._auth.get_token = AsyncMock(
+            side_effect=CaptchaRequiredError("E000167", {"errorCode": "E000167"})
+        )
+
+        with patch.object(
+            monitor._notifier, "send_text", new=AsyncMock(),
+        ) as mock_send:
+            results = await monitor.run_once()
+
+        # 应返回空结果，不崩溃
+        assert results == {}
+        # 应发送企业微信通知
+        mock_send.assert_awaited_once()
+        call_text = mock_send.call_args[0][0]
+        assert "CAPTCHA" in call_text
+        assert "m.hnair.com" in call_text
+
+    @pytest.mark.asyncio
+    async def test_captcha_no_notifier_still_graceful(self, tmp_path, monkeypatch):
+        """无企业微信配置时 E000167 也应优雅退出（仅日志）。"""
+        monkeypatch.setenv("HNA_USERNAME", "13800000000")
+        monkeypatch.setenv("HNA_PASSWORD", "test_password")
+        hna = HNAConfig()
+        mon = MonitorConfig()
+        store = SubscriptionStore(str(tmp_path / "captcha_no_wecom.json"))
+        store.add(make_sub())
+        monitor = Monitor(hna, None, mon, store, dry_run=True)
+        monitor._auth.get_token = AsyncMock(
+            side_effect=CaptchaRequiredError("E000167", {"errorCode": "E000167"})
+        )
+
+        results = await monitor.run_once()
+        assert results == {}

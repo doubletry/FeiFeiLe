@@ -88,6 +88,7 @@ class WeComNotifier:
             seats = f" 余{offer.seats_remaining}张" if offer.seats_remaining > 0 else ""
             lines.append(
                 f'<div class="normal">{tag}{offer.flight_no} '
+                f"{offer.depart_date} "
                 f"{offer.origin}→{offer.destination} "
                 f"{offer.depart_time}→{offer.arrive_time}{seats}</div>"
             )

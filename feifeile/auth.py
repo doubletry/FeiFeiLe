@@ -14,9 +14,11 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import json
 import os
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -69,6 +71,12 @@ _RETRY_BASE_DELAY = 2.0
 # ---------------------------------------------------------------------------
 _LOGIN_PATH = "/appum/common/auth/v2/login"
 _REFRESH_PATH = "/appum/common/auth/v2/refresh"
+
+# 需要验证码的业务错误码
+_CAPTCHA_ERROR_CODE = "E000167"
+
+# Token 持久化文件默认路径
+_DEFAULT_TOKEN_FILE = ".auth_token.json"
 
 
 # ===================================================================
@@ -185,6 +193,14 @@ class AuthError(Exception):
     """认证相关错误"""
 
 
+class CaptchaRequiredError(AuthError):
+    """服务端要求输入验证码时抛出，携带完整响应数据。"""
+
+    def __init__(self, message: str, response_body: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.response_body = response_body
+
+
 # ===================================================================
 # 认证客户端
 # ===================================================================
@@ -199,9 +215,17 @@ class HNAAuth:
         token = await auth.get_token()
     """
 
-    def __init__(self, config: HNAConfig) -> None:
+    def __init__(
+        self,
+        config: HNAConfig,
+        *,
+        token_file: str | Path = _DEFAULT_TOKEN_FILE,
+    ) -> None:
         self._config = config
         self._token: AuthToken | None = None
+        self._token_file = Path(token_file)
+        # 启动时尝试加载已持久化的 Token
+        self._load_token()
 
     # ------------------------------------------------------------------
     # 公共接口
@@ -223,6 +247,81 @@ class HNAAuth:
         """清除缓存的 Token（如收到 401 后强制重新登录）。"""
         self._token = None
 
+    def inject_token(
+        self,
+        access_token: str,
+        refresh_token: str = "",
+        expires_in: int = 7200,
+        member_id: str = "",
+    ) -> AuthToken:
+        """注入外部获取的 Token（如从其他设备拦截）并持久化。"""
+        self._token = AuthToken(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            expires_at=time.time() + expires_in,
+            member_id=member_id,
+        )
+        self._save_token()
+        return self._token
+
+    def inject_from_response(self, response_json: str | dict) -> AuthToken:
+        """从登录接口完整 Response JSON 中自动解析并导入 Token。"""
+        if isinstance(response_json, str):
+            response = json.loads(response_json)
+        else:
+            response = response_json
+        data = response.get("data") or response
+        self._token = self._parse_token(data)
+        self._save_token()
+        return self._token
+
+    # ------------------------------------------------------------------
+    # Token 持久化
+    # ------------------------------------------------------------------
+
+    def _save_token(self) -> None:
+        """将当前 Token 保存到文件。"""
+        if self._token is None:
+            return
+        data = {
+            "access_token": self._token.access_token,
+            "refresh_token": self._token.refresh_token,
+            "expires_at": self._token.expires_at,
+            "member_id": self._token.member_id,
+        }
+        try:
+            self._token_file.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            logger.debug("已保存 Token 到 {}", self._token_file)
+        except OSError as exc:
+            logger.warning("保存 Token 文件失败: {}", exc)
+
+    def _load_token(self) -> None:
+        """从文件加载已持久化的 Token（如存在且未过期）。"""
+        if not self._token_file.exists():
+            return
+        try:
+            data = json.loads(self._token_file.read_text(encoding="utf-8"))
+            token = AuthToken(
+                access_token=data["access_token"],
+                refresh_token=data.get("refresh_token", ""),
+                expires_at=data["expires_at"],
+                member_id=data.get("member_id", ""),
+            )
+            if token.is_expired:
+                logger.info("已保存的 Token 已过期，将尝试刷新")
+                # 仍然加载，以便在 get_token 中用 refresh_token 刷新
+            self._token = token
+            logger.info(
+                "已加载已持久化的 Token（会员: {}, 过期: {}）",
+                token.member_id or "未知",
+                "是" if token.is_expired else "否",
+            )
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            logger.warning("加载 Token 文件失败，将重新登录: {}", exc)
+
     # ------------------------------------------------------------------
     # 内部实现
     # ------------------------------------------------------------------
@@ -234,7 +333,11 @@ class HNAAuth:
         }
 
     async def _login(self) -> None:
-        """使用账号密码登录，获取 Token。"""
+        """使用账号密码登录，获取 Token。
+
+        如果服务端要求 CAPTCHA 验证（E000167），直接抛出
+        CaptchaRequiredError 让调用方（如 Monitor）处理。
+        """
         data_params: dict[str, Any] = {
             "number": self._config.username,
             "pin": _rsa_encrypt(self._config.password),
@@ -247,7 +350,6 @@ class HNAAuth:
         }
         url = f"{self._config.base_url}{_LOGIN_PATH}"
         headers = self._build_headers()
-        # 签名使用 common + data 合并后的扁平字典
         flat_params = {**common, **data_params}
         sign = _compute_sign(
             headers, {}, flat_params,
@@ -256,6 +358,7 @@ class HNAAuth:
         logger.info("正在登录海南航空账号: {}", self._config.username)
         result = await self._post(url, body, headers, params={"hnairSign": sign})
         self._token = self._parse_token(result)
+        self._save_token()
         if not self._token.member_id:
             logger.warning("登录成功但未获取到会员 ID，响应数据: {}", result)
         else:
@@ -283,6 +386,7 @@ class HNAAuth:
         logger.debug("正在刷新 Token")
         result = await self._post(url, body, headers, params={"hnairSign": sign})
         self._token = self._parse_token(result)
+        self._save_token()
         logger.debug("Token 刷新成功")
 
     async def _post(
@@ -347,6 +451,8 @@ class HNAAuth:
         if not body.get("success", False):
             code = body.get("errorCode") or "UNKNOWN"
             msg = body.get("errorMessage") or "响应格式异常"
+            if code == _CAPTCHA_ERROR_CODE:
+                raise CaptchaRequiredError(f"业务错误 {code}: {msg}", body)
             raise AuthError(f"业务错误 {code}: {msg}")
         return body.get("data") or body
 
@@ -359,8 +465,9 @@ class HNAAuth:
             {
                 "ok": true,
                 "token": "access_token_value",
-                "secret": "...",
-                "user": {"cid": "会员号", "ucUserId": "...", "userCode": "..."}
+                "secret": "refresh_token",
+                "expireTime": 1776611294,
+                "user": {"ucUserId": "...", "userCode": "...", "cid": "..."}
             }
         """
         access_token = (
@@ -373,17 +480,25 @@ class HNAAuth:
             data.get("refreshToken") or data.get("refresh_token")
             or data.get("secret") or ""
         )
-        expires_in = int(
-            data.get("expiresIn") or data.get("expires_in") or 7200
-        )
-        # 会员 ID 可能在 data.user.cid / data.memberId 等位置
+
+        # 过期时间：优先使用绝对时间戳 expireTime，否则用相对秒数 expiresIn
+        expire_time = data.get("expireTime")
+        if expire_time and int(expire_time) > time.time():
+            expires_at = float(expire_time)
+        else:
+            expires_in = int(
+                data.get("expiresIn") or data.get("expires_in") or 7200
+            )
+            expires_at = time.time() + expires_in
+
+        # 会员 ID：优先用未加密的 ucUserId/userCode，cid 可能是加密值（%hna%...）
         user_info = data.get("user") or {}
         member_id = str(
-            user_info.get("cid")
+            user_info.get("ucUserId")
+            or user_info.get("userCode")
             or data.get("memberId")
             or data.get("member_id")
-            or user_info.get("ucUserId")
-            or user_info.get("userCode")
+            or user_info.get("cid")
             or ""
         )
         if not access_token:
@@ -391,6 +506,6 @@ class HNAAuth:
         return AuthToken(
             access_token=access_token,
             refresh_token=refresh_token,
-            expires_at=time.time() + expires_in,
+            expires_at=expires_at,
             member_id=member_id,
         )
