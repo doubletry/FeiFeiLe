@@ -4,13 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from feifeile.config import (
-    HNAConfig,
-    MonitorConfig,
-    WeComConfig,
-    get_env_file,
-    set_env_file,
-)
+from feifeile.config import HNAConfig, MonitorConfig, WeComConfig
 
 
 class TestHNAConfig:
@@ -70,17 +64,3 @@ class TestMonitorConfig:
         monkeypatch.setenv("MONITOR_PRICE_THRESHOLD", "0")
         with pytest.raises(Exception):
             MonitorConfig()
-
-
-class TestEnvFileHelpers:
-    """set_env_file / get_env_file 辅助函数测试"""
-
-    def test_default_env_file(self):
-        set_env_file(".env")  # 重置
-        assert get_env_file() == ".env"
-
-    def test_set_and_get(self, tmp_path):
-        custom = tmp_path / "my.env"
-        set_env_file(custom)
-        assert get_env_file() == custom
-        set_env_file(".env")  # 清理

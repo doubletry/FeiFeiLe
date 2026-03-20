@@ -20,7 +20,7 @@ from pathlib import Path
 import click
 from loguru import logger
 
-from feifeile.config import HNAConfig, MonitorConfig, WeComConfig, set_env_file
+from feifeile.config import HNAConfig, MonitorConfig, WeComConfig
 from feifeile.monitor import Monitor, Subscription, SubscriptionStore
 
 
@@ -67,8 +67,6 @@ def main(ctx: click.Context, env_file: str | None) -> None:
     """飞飞乐 — 海南航空航班特价监控工具"""
     ctx.ensure_object(dict)
     ctx.obj["env_file"] = env_file
-    if env_file is not None:
-        set_env_file(env_file)
 
 
 @main.command()

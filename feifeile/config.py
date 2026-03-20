@@ -1,30 +1,14 @@
 """配置管理模块
 
 通过环境变量或 .env 文件加载所有运行时配置。
-支持通过 ``--env`` CLI 参数指定自定义 .env 文件路径。
+支持通过 ``--env`` CLI 参数指定自定义 .env 文件路径（传递 pydantic-settings
+的 ``_env_file`` 构造参数来覆盖默认值）。
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-# 模块级变量，保存当前使用的 .env 文件路径；
-# CLI 层通过 set_env_file() 在加载配置前设置。
-_env_file: str | Path = ".env"
-
-
-def set_env_file(path: str | Path) -> None:
-    """设置自定义 .env 文件路径。"""
-    global _env_file  # noqa: PLW0603
-    _env_file = path
-
-
-def get_env_file() -> str | Path:
-    """返回当前使用的 .env 文件路径。"""
-    return _env_file
 
 
 class HNAConfig(BaseSettings):
