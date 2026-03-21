@@ -71,8 +71,8 @@ def main(ctx: click.Context, data_dir: str) -> None:
 
 
 @main.command()
-@click.option("--origin", "-o", required=True, help="出发机场三字码（如 HAK）")
-@click.option("--destination", "-D", required=True, help="到达机场三字码（如 PEK）")
+@click.option("-f", "--from", "origin", required=True, help="出发机场三字码（如 HAK）")
+@click.option("-t", "--to", "destination", required=True, help="到达机场三字码（如 PEK）")
 @click.option(
     "--date",
     "depart_date",
@@ -81,11 +81,20 @@ def main(ctx: click.Context, data_dir: str) -> None:
     help="出发日期，格式 YYYY-MM-DD",
 )
 @click.option(
-    "--threshold",
-    "-t",
+    "-p",
+    "--price",
+    "threshold",
     default=None,
     type=float,
     help="价格阈值（元），默认使用配置文件中的值",
+)
+@click.option(
+    "-d",
+    "--data-dir",
+    "add_data_dir",
+    default=None,
+    type=click.Path(file_okay=False),
+    help="数据目录（覆盖全局 -d 选项）",
 )
 @click.pass_context
 def add(
@@ -94,9 +103,11 @@ def add(
     destination: str,
     depart_date: date,
     threshold: float | None,
+    add_data_dir: str | None,
 ) -> None:
     """添加一条航班订阅。"""
-    data_dir: Path = ctx.obj["data_dir"]
+    data_dir: Path = Path(add_data_dir).resolve() if add_data_dir else ctx.obj["data_dir"]
+    data_dir.mkdir(parents=True, exist_ok=True)
     _, _, monitor_config = _load_all_configs(require_wecom=False, data_dir=data_dir)
     store = SubscriptionStore(str(data_dir / "subscriptions.json"))
     price_threshold = threshold if threshold is not None else monitor_config.price_threshold

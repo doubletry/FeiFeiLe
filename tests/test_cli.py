@@ -80,12 +80,109 @@ class TestDataDirOption:
         runner = CliRunner()
         result = runner.invoke(
             main,
-            ["-d", str(tmp_path), "add", "-o", "HAK", "-D", "PEK", "--date", "2099-01-01"],
+            ["-d", str(tmp_path), "add", "-f", "HAK", "-t", "PEK", "--date", "2099-01-01"],
         )
         assert result.exit_code == 0
         assert "已添加订阅" in result.output
         # 验证订阅文件被创建在数据目录下
         assert (tmp_path / "subscriptions.json").exists()
+
+    def test_cli_add_with_local_data_dir(self, tmp_path, monkeypatch):
+        """验证 add 子命令自身的 -d 选项可将订阅写入指定目录。"""
+        data_dir = tmp_path / "custom"
+        data_dir.mkdir()
+        env_file = data_dir / ".env"
+        env_file.write_text(
+            "HNA_USERNAME=u\nHNA_PASSWORD=p\n"
+        )
+        monkeypatch.delenv("HNA_USERNAME", raising=False)
+        monkeypatch.delenv("HNA_PASSWORD", raising=False)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["add", "-d", str(data_dir), "-f", "HAK", "-t", "PEK", "--date", "2099-01-01"],
+        )
+        assert result.exit_code == 0
+        assert "已添加订阅" in result.output
+        assert (data_dir / "subscriptions.json").exists()
+
+    def test_cli_add_local_data_dir_overrides_global(self, tmp_path, monkeypatch):
+        """验证 add -d 覆盖全局 -d 选项。"""
+        global_dir = tmp_path / "global"
+        local_dir = tmp_path / "local"
+        global_dir.mkdir()
+        local_dir.mkdir()
+        env_file = local_dir / ".env"
+        env_file.write_text(
+            "HNA_USERNAME=u\nHNA_PASSWORD=p\n"
+        )
+        monkeypatch.delenv("HNA_USERNAME", raising=False)
+        monkeypatch.delenv("HNA_PASSWORD", raising=False)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["-d", str(global_dir), "add", "-d", str(local_dir), "-f", "SYX", "-t", "SHA", "--date", "2099-06-01"],
+        )
+        assert result.exit_code == 0
+        assert "已添加订阅" in result.output
+        # 订阅应写入 local_dir 而非 global_dir
+        assert (local_dir / "subscriptions.json").exists()
+        assert not (global_dir / "subscriptions.json").exists()
+
+    def test_cli_add_with_price_option(self, tmp_path, monkeypatch):
+        """验证 add 子命令的 -p / --price 参数设置价格阈值。"""
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "HNA_USERNAME=u\nHNA_PASSWORD=p\n"
+        )
+        monkeypatch.delenv("HNA_USERNAME", raising=False)
+        monkeypatch.delenv("HNA_PASSWORD", raising=False)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["-d", str(tmp_path), "add", "-f", "HAK", "-t", "PEK", "--date", "2099-01-01", "-p", "299"],
+        )
+        assert result.exit_code == 0
+        assert "≤¥299" in result.output
+
+    def test_cli_add_with_long_options(self, tmp_path, monkeypatch):
+        """验证 add 子命令的长参数 --from / --to / --price 可正常使用。"""
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "HNA_USERNAME=u\nHNA_PASSWORD=p\n"
+        )
+        monkeypatch.delenv("HNA_USERNAME", raising=False)
+        monkeypatch.delenv("HNA_PASSWORD", raising=False)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["-d", str(tmp_path), "add", "--from", "CAN", "--to", "PKX", "--date", "2099-07-01", "--price", "399"],
+        )
+        assert result.exit_code == 0
+        assert "已添加订阅" in result.output
+        assert "CAN→PKX" in result.output
+        assert "≤¥399" in result.output
+
+    def test_cli_add_creates_nonexistent_data_dir(self, tmp_path, monkeypatch):
+        """验证 add -d 可自动创建不存在的数据目录。"""
+        data_dir = tmp_path / "new" / "nested"
+        assert not data_dir.exists()
+        monkeypatch.setenv("HNA_USERNAME", "u")
+        monkeypatch.setenv("HNA_PASSWORD", "p")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["add", "-d", str(data_dir), "-f", "HAK", "-t", "PEK", "--date", "2099-01-01"],
+        )
+        assert result.exit_code == 0
+        assert "已添加订阅" in result.output
+        assert data_dir.exists()
+        assert (data_dir / "subscriptions.json").exists()
 
     def test_cli_check_dry_run_with_data_dir(self, tmp_path, monkeypatch):
         """验证 check --dry-run 搭配 -d 正常运行。"""
