@@ -167,6 +167,23 @@ class TestDataDirOption:
         assert "CAN→PKX" in result.output
         assert "≤¥399" in result.output
 
+    def test_cli_add_creates_nonexistent_data_dir(self, tmp_path, monkeypatch):
+        """验证 add -d 可自动创建不存在的数据目录。"""
+        data_dir = tmp_path / "new" / "nested"
+        assert not data_dir.exists()
+        monkeypatch.setenv("HNA_USERNAME", "u")
+        monkeypatch.setenv("HNA_PASSWORD", "p")
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main,
+            ["add", "-d", str(data_dir), "-f", "HAK", "-t", "PEK", "--date", "2099-01-01"],
+        )
+        assert result.exit_code == 0
+        assert "已添加订阅" in result.output
+        assert data_dir.exists()
+        assert (data_dir / "subscriptions.json").exists()
+
     def test_cli_check_dry_run_with_data_dir(self, tmp_path, monkeypatch):
         """验证 check --dry-run 搭配 -d 正常运行。"""
         subs_file = tmp_path / "subscriptions.json"

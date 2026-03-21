@@ -8,12 +8,6 @@
 
 全局选项：
   -d        指定数据目录（.env / token / subscriptions 统一存放）
-
-add 子命令选项：
-  -f / --from   出发机场三字码
-  -t / --to     到达机场三字码
-  -p / --price  价格阈值
-  -d / --data-dir  数据目录（覆盖全局 -d）
 """
 
 from __future__ import annotations
@@ -113,6 +107,7 @@ def add(
 ) -> None:
     """添加一条航班订阅。"""
     data_dir: Path = Path(add_data_dir).resolve() if add_data_dir else ctx.obj["data_dir"]
+    data_dir.mkdir(parents=True, exist_ok=True)
     _, _, monitor_config = _load_all_configs(require_wecom=False, data_dir=data_dir)
     store = SubscriptionStore(str(data_dir / "subscriptions.json"))
     price_threshold = threshold if threshold is not None else monitor_config.price_threshold
